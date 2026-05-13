@@ -1,0 +1,6 @@
+fastapi
+uvicorn
+pydantic
+numpy
+websockets
+# We will install jupedsim separately in editable mode
