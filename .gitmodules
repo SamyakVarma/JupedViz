@@ -1,0 +1,3 @@
+[submodule "jupedsim"]
+	path = jupedsim
+	url = https://github.com/SamyakVarma/jupedsim.git
