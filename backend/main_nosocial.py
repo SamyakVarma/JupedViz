@@ -48,8 +48,6 @@ def build_jps_simulation(config: SimulationConfig, trajectory_path: str):
     # Separate elements by type
     walkable_polys = []
     obstacle_polys = []
-    smoke_obstacle_polys = []
-    fire_obstacle_polys = []
     starts = []
     exits = []
     journey_lines = []
@@ -61,15 +59,12 @@ def build_jps_simulation(config: SimulationConfig, trajectory_path: str):
     for i, el in enumerate(config.elements):
         if el.type == 'scenario':
             if el.scenarioType == 'Smoke':
-                sx, sy = el.points[0].x, el.points[0].y
-                smoke_sources.append((sx, sy))
-                # Add small impassable obstacle to force A* pathfinding around smoke
-                smoke_obstacle_polys.append(shapely.Point(sx, sy).buffer(1.0))
+                smoke_sources.append((el.points[0].x, el.points[0].y))
             elif el.scenarioType == 'Fire':
                 fx, fy = el.points[0].x, el.points[0].y
                 fire_sources.append((fx, fy))
-                # Add impassable obstacle (reduced to 1.5m radius to avoid completely severing corridors)
-                fire_obstacle_polys.append(shapely.Point(fx, fy).buffer(1.5))
+                # Add impassable obstacle
+                obstacle_polys.append(shapely.Point(fx, fy).buffer(5.0))
             continue
         elif el.type == 'poi':
             pois.append((el.points[0].x, el.points[0].y))
@@ -98,44 +93,14 @@ def build_jps_simulation(config: SimulationConfig, trajectory_path: str):
     if not walkable_polys:
         walkable_polys = [shapely.box(0, 0, 20, 20)]
     area_union = shapely.unary_union(walkable_polys)
+    if obstacle_polys:
+        area_union = area_union.difference(shapely.unary_union(obstacle_polys))
     
-    all_hard_obstacles = obstacle_polys + fire_obstacle_polys + smoke_obstacle_polys
-    if all_hard_obstacles:
-        area_union_full = area_union.difference(shapely.unary_union(all_hard_obstacles))
-    else:
-        area_union_full = area_union
-    
-    try:
-        simulation = jps.Simulation(
-            model=jps.SocialForceModel(),
-            geometry=shapely.GeometryCollection(area_union_full).wkt,
-            trajectory_writer=jps.SqliteTrajectoryWriter(output_file=pathlib.Path(trajectory_path)),
-        )
-    except RuntimeError as e:
-        if "not connected" in str(e).lower() or "accessible area" in str(e).lower():
-            print(f"WARNING: Smoke obstacles disconnected the navigation mesh! Falling back to soft-smoke...")
-            essential_obstacles = obstacle_polys + fire_obstacle_polys
-            if essential_obstacles:
-                area_union_essential = area_union.difference(shapely.unary_union(essential_obstacles))
-            else:
-                area_union_essential = area_union
-                
-            try:
-                simulation = jps.Simulation(
-                    model=jps.SocialForceModel(),
-                    geometry=shapely.GeometryCollection(area_union_essential).wkt,
-                    trajectory_writer=jps.SqliteTrajectoryWriter(output_file=pathlib.Path(trajectory_path)),
-                )
-            except RuntimeError as e2:
-                if "not connected" in str(e2).lower() or "accessible area" in str(e2).lower():
-                    error_msg = "NO POSSIBLE PATH: The Fire obstacles completely block the path to the exit. Simulation aborted."
-                    print(f"ERROR: {error_msg}")
-                    raise ValueError(error_msg)
-                else:
-                    raise e2
-        else:
-            raise e
-            
+    simulation = jps.Simulation(
+        model=jps.CollisionFreeSpeedModelV2(),
+        geometry=shapely.GeometryCollection(area_union).wkt,
+        trajectory_writer=jps.SqliteTrajectoryWriter(output_file=pathlib.Path(trajectory_path)),
+    )
     simulation.set_ambient_temperature(config.ambientTemperature)
     
     # Smoke sources are handled dynamically in the sim loop
@@ -152,14 +117,6 @@ def build_jps_simulation(config: SimulationConfig, trajectory_path: str):
     poi_stages = []
     for px, py in pois:
         poi_stages.append(simulation.add_waypoint_stage((px, py), 1.0))
-        
-    # Panic Journeys (pointing to entry ways)
-    panic_journeys = {}
-    for s in starts:
-        cx, cy = s['poly'].centroid.x, s['poly'].centroid.y
-        stage_id = simulation.add_waypoint_stage((cx, cy), 1.0)
-        j_id = simulation.add_journey(jps.JourneyDescription([stage_id]))
-        panic_journeys[s['id']] = (j_id, stage_id)
     
     # Define Journeys based on Journey elements
     # A journey connects a start to an exit if the journey line points are inside them
@@ -235,19 +192,15 @@ def build_jps_simulation(config: SimulationConfig, trajectory_path: str):
                 ocean_values = {t: np.random.uniform(0.0, 0.5) for t in ocean_traits}
                 ocean_values[dominant_trait] = np.random.uniform(0.7, 1.0) # Dominant trait is high
                 
-                params = jps.SocialForceModelAgentParameters(
+                params = jps.CollisionFreeSpeedModelV2AgentParameters(
                     position=pos, 
-                    radius=radius,
-                    desired_speed=np.random.uniform(0.8, 1.2)
+                    radius=radius, 
+                    type=a_type,
+                    heartbeat=np.random.uniform(60, 80),
+                    stress=np.random.uniform(0.0, 0.2),
+                    panic=0.0,
+                    **ocean_values
                 )
-                
-                # Bind generic attributes required by the backend
-                params.type = a_type
-                params.heartbeat = np.random.uniform(60, 80)
-                params.stress = np.random.uniform(0.0, 0.2)
-                params.panic = 0.0
-                for k, v in ocean_values.items():
-                    setattr(params, k, v)
                 
                 if config.loiterMode and poi_stages:
                     # Create a continuous looping journey through POIs
@@ -293,7 +246,7 @@ def build_jps_simulation(config: SimulationConfig, trajectory_path: str):
         except Exception as e:
             print(f"Error spawning in start {s['id']}: {e}")
             
-    return simulation, total_agents, agent_metadata, exit_to_stage, poi_stages, fire_sources, smoke_sources, exit_centroids, panic_journeys
+    return simulation, total_agents, agent_metadata, exit_to_stage, poi_stages, fire_sources, smoke_sources, exit_centroids
 
 @app.websocket("/ws/simulation")
 async def simulation_stream(websocket: WebSocket):
@@ -313,7 +266,7 @@ async def simulation_stream(websocket: WebSocket):
                     try: os.remove(traj_file)
                     except: pass
                     
-                sim, initial_agents, agent_metadata, exit_to_stage, poi_stages, fire_sources, smoke_sources, exit_centroids, panic_journeys = build_jps_simulation(config, traj_file)
+                sim, initial_agents, agent_metadata, exit_to_stage, poi_stages, fire_sources, smoke_sources, exit_centroids = build_jps_simulation(config, traj_file)
                 total_steps = config.duration * config.fps
                 
                 # Cache types and metadata for playback
@@ -326,12 +279,10 @@ async def simulation_stream(websocket: WebSocket):
                 
                 heatmaps_cache = {} # Map frame_idx -> heatmap
                 fatigue_cache = {} # Map frame_idx -> {agent_id: fatigue}
-                panic_cache = {} # Map frame_idx -> {agent_id: panic}
                 print(f"Starting calculation: {total_steps} steps, {initial_agents} agents")
                 
                 emergency_trigger_step = config.emergencyTriggerTime * config.fps if config.emergencyMode else -1
                 emergency_triggered = False
-                em_journeys = {}
                 
                 for step in range(total_steps):
                     # Hazard Avoidance: Smoke causes 50% speed reduction
@@ -344,64 +295,31 @@ async def simulation_stream(websocket: WebSocket):
                             else:
                                 a.model.desired_speed = base_speed
 
-                    if config.emergencyMode and step >= emergency_trigger_step:
-                        if not emergency_triggered:
-                            emergency_triggered = True
-                            if exit_centroids:
-                                for stage_id in exit_centroids:
-                                    em_journeys[stage_id] = sim.add_journey(jps.JourneyDescription([stage_id]))
-                                
-                                for a in sim.agents():
-                                    best_stage = None
-                                    min_cost = float('inf')
-                                    for stage_id, (cx, cy) in exit_centroids.items():
-                                        dist_to_exit = math.hypot(a.position[0]-cx, a.position[1]-cy)
-                                        min_f_dist = min([math.hypot(cx-fx, cy-fy) for fx, fy in fire_sources]) if fire_sources else float('inf')
-                                        min_s_dist = min([math.hypot(cx-sx, cy-sy) for sx, sy in smoke_sources]) if smoke_sources else float('inf')
-                                        
-                                        fire_pen = 1000.0 / max(min_f_dist, 1.0) if fire_sources else 0.0
-                                        smoke_pen = 500.0 / max(min_s_dist, 1.0) if smoke_sources else 0.0
-                                        cost = dist_to_exit + fire_pen + smoke_pen
-                                        
-                                        if cost < min_cost:
-                                            min_cost = cost
-                                            best_stage = stage_id
-                                            
-                                    if best_stage:
-                                        agent_metadata[a.id]["safe_exit_stage"] = best_stage
-                                        sim.switch_agent_journey(agent_id=a.id, journey_id=em_journeys[best_stage], stage_id=best_stage)
-                                        
-                        # Continuous Panic Evaluation
-                        import random
-                        for a in sim.agents():
-                            m = agent_metadata[a.id]
+                    if config.emergencyMode and not emergency_triggered and step >= emergency_trigger_step:
+                        emergency_triggered = True
+                        if exit_centroids:
+                            em_journeys = {}
+                            for stage_id in exit_centroids:
+                                em_journeys[stage_id] = sim.add_journey(jps.JourneyDescription([stage_id]))
                             
-                            # 1. Panic Accumulation
-                            fire_dist = min([math.hypot(a.position[0]-fx, a.position[1]-fy) for fx, fy in fire_sources]) if fire_sources else 20.0
-                            panic_rate = 0.05 / max(fire_dist, 1.0) if fire_sources else 0.0
-                            neuroticism = m.get("neuroticism", 0.5)
-                            
-                            m["panic"] = min(1.0, m["panic"] + panic_rate * (1.0 + neuroticism))
-                            
-                            # 2. Panic Action
-                            is_panicking = m.get("is_panicking", False)
-                            if m["panic"] > 0.6 and not is_panicking:
-                                if random.random() < m["panic"] * 0.05:
-                                    m["is_panicking"] = True
-                                    s_id = m.get("start_id")
-                                    if s_id in panic_journeys:
-                                        sim.switch_agent_journey(agent_id=a.id, journey_id=panic_journeys[s_id][0], stage_id=panic_journeys[s_id][1])
+                            for a in sim.agents():
+                                best_stage = None
+                                min_cost = float('inf')
+                                for stage_id, (cx, cy) in exit_centroids.items():
+                                    dist_to_exit = math.hypot(a.position[0]-cx, a.position[1]-cy)
+                                    min_f_dist = min([math.hypot(cx-fx, cy-fy) for fx, fy in fire_sources]) if fire_sources else float('inf')
+                                    min_s_dist = min([math.hypot(cx-sx, cy-sy) for sx, sy in smoke_sources]) if smoke_sources else float('inf')
+                                    
+                                    fire_pen = 1000.0 / max(min_f_dist, 1.0) if fire_sources else 0.0
+                                    smoke_pen = 500.0 / max(min_s_dist, 1.0) if smoke_sources else 0.0
+                                    cost = dist_to_exit + fire_pen + smoke_pen
+                                    
+                                    if cost < min_cost:
+                                        min_cost = cost
+                                        best_stage = stage_id
                                         
-                    # Global Panic Decay & Recovery
-                    for a in sim.agents():
-                        m = agent_metadata[a.id]
-                        m["panic"] = max(0.0, m.get("panic", 0.0) - 0.0005)
-                        
-                        if m.get("is_panicking", False) and m["panic"] < 0.3:
-                            m["is_panicking"] = False
-                            safe_exit = m.get("safe_exit_stage")
-                            if safe_exit and emergency_triggered and safe_exit in em_journeys:
-                                sim.switch_agent_journey(agent_id=a.id, journey_id=em_journeys[safe_exit], stage_id=safe_exit)
+                                if best_stage:
+                                    sim.switch_agent_journey(agent_id=a.id, journey_id=em_journeys[best_stage], stage_id=best_stage)
                                 
                     if step > 0 and sim.agent_count() == 0:
                         print(f"Early exit: Step {step}")
@@ -433,8 +351,6 @@ async def simulation_stream(websocket: WebSocket):
                                 frame_idx = step // sampling_rate
                                 if frame_idx not in fatigue_cache: fatigue_cache[frame_idx] = {}
                                 fatigue_cache[frame_idx][a.id] = fatigue_val
-                                if frame_idx not in panic_cache: panic_cache[frame_idx] = {}
-                                panic_cache[frame_idx][a.id] = m.get("panic", 0.0)
                         
                         heatmap_data = sim.get_heatmap()
                         if step % sampling_rate == 0:
@@ -464,21 +380,15 @@ async def simulation_stream(websocket: WebSocket):
                     agents = []
                     for a in frame.agents:
                         f_val = fatigue_cache[frame_idx].get(a.id, 0.0) if frame_idx < len(fatigue_cache) else 0.0
-                        p_val = panic_cache[frame_idx].get(a.id, 0.0) if frame_idx < len(panic_cache) else 0.0
                         a_type = agent_info_cache["types"].get(a.id, 'male')
                         agents.append({
                             "id": a.id, "x": a.position[0], "y": a.position[1], 
                             "fatigue": f_val,
-                            "type": a_type,
-                            "panic": p_val
+                            "type": a_type
                         })
                         # Add metadata for playback
                         m = agent_info_cache.get("metadata", {}).get(a.id, {})
-                        
-                        # Copy to avoid mutating original, remove panic so it doesn't overwrite dynamic p_val
-                        m_copy = m.copy()
-                        if "panic" in m_copy: del m_copy["panic"]
-                        agents[-1].update(m_copy)
+                        agents[-1].update(m)
                     
                     hm = heatmaps_cache[frame_idx] if frame_idx < len(heatmaps_cache) else None
                     if hm:

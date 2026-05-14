@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import './App.css';
-import { 
-  Settings, FileText, Box, Share2, 
+import {
+  Settings, FileText, Box, Share2,
   MousePointer2, Move, RotateCcw, Trash2, Copy, Undo, Redo,
   Square, LogOut, Play, Pause, Shield, MapPin, Clock,
   X, HelpCircle, MessageSquare, User, ChevronRight, Activity,
@@ -17,7 +17,7 @@ function App() {
   const [drawingPoints, setDrawingPoints] = useState([]);
   const [history, setHistory] = useState([]);
   const [journeySource, setJourneySource] = useState(null);
-  
+
   // Simulation & Playback State
   const [agents, setAgents] = useState([]);
   const [isSimulating, setIsSimulating] = useState(false);
@@ -38,16 +38,16 @@ function App() {
   const [loiterMode, setLoiterMode] = useState(false);
   const [emergencyMode, setEmergencyMode] = useState(false);
   const [emergencyTriggerTime, setEmergencyTriggerTime] = useState(30);
-  
+
   const [leftTab, setLeftTab] = useState('Crowd');
   const [rightTab, setRightTab] = useState('Visuals');
-  
+
   // Viz Options
   const [showTrails, setShowTrails] = useState(true);
   const [colorMode, setColorMode] = useState('Uniform Color');
   const [trailColorMode, setTrailColorMode] = useState('Travel Distance');
   const [agentTrails, setAgentTrails] = useState(new Map()); // id -> points[]
-  
+
   const wsRef = useRef(null);
   const canvasRef = useRef(null);
   const fileInputRef = useRef(null);
@@ -70,7 +70,7 @@ function App() {
       const xi = poly[i].x, yi = poly[i].y;
       const xj = poly[j].x, yj = poly[j].y;
       const intersect = ((yi > p.y) !== (yj > p.y)) &&
-          (p.x < (xj - xi) * (p.y - yi) / (yj - yi) + xi);
+        (p.x < (xj - xi) * (p.y - yi) / (yj - yi) + xi);
       if (intersect) inside = !inside;
     }
     return inside;
@@ -83,9 +83,9 @@ function App() {
     ws.onopen = () => {
       ws.send(JSON.stringify({
         action: 'calculate',
-        config: { 
-          elements: elements, 
-          fps: 20, 
+        config: {
+          elements: elements,
+          fps: 20,
           duration: simDuration,
           ambientTemperature: ambientTemp,
           crowdComposition: { male: 50, female: 50, child: 0 },
@@ -135,8 +135,8 @@ function App() {
         const pts = next.get(a.id) || [];
         let totalDist = pts.length > 0 ? pts[pts.length - 1].totalDist || 0 : 0;
         if (pts.length > 0) {
-            const last = pts[pts.length - 1];
-            totalDist += Math.hypot(a.x - last.x, a.y - last.y);
+          const last = pts[pts.length - 1];
+          totalDist += Math.hypot(a.x - last.x, a.y - last.y);
         }
         next.set(a.id, [...pts, { x: a.x, y: a.y, fatigue: a.fatigue, totalDist: totalDist, target: { x: a.target_x, y: a.target_y } }]);
       });
@@ -173,7 +173,7 @@ function App() {
     }
   };
 
-  const [transform, setTransform] = useState({ x: 0, y: 0, scale: 20 }); 
+  const [transform, setTransform] = useState({ x: 0, y: 0, scale: 20 });
   const [mousePos, setMousePos] = useState({ x: 0, y: 0 });
   const [isPanning, setIsPanning] = useState(false);
   const [startPan, setStartPan] = useState({ x: 0, y: 0 });
@@ -206,33 +206,33 @@ function App() {
       if (canvas.width !== canvas.clientWidth || canvas.height !== canvas.clientHeight) { canvas.width = canvas.clientWidth; canvas.height = canvas.clientHeight; }
       ctx.clearRect(0, 0, canvas.width, canvas.height);
       const centerX = canvas.width / 2 + transform.x; const centerY = canvas.height / 2 + transform.y;
-      const step = transform.scale; 
+      const step = transform.scale;
 
       // 0. Heatmap
       if (showHeatmap && heatmapData && heatmapData.grid) {
         const { width, height, resolution, grid, bounds } = heatmapData;
-        
+
         // Create an offscreen canvas for the heatmap to allow smooth scaling
         if (!window.heatmapCanvas || window.heatmapCanvas.width !== width || window.heatmapCanvas.height !== height) {
           window.heatmapCanvas = document.createElement('canvas');
           window.heatmapCanvas.width = width;
           window.heatmapCanvas.height = height;
         }
-        
+
         const hCtx = window.heatmapCanvas.getContext('2d');
         const imgData = hCtx.createImageData(width, height);
-        
+
         for (let y = 0; y < height; y++) {
           for (let x = 0; x < width; x++) {
             const gridIdx = y * width + x;
             const imgIdx = ((height - 1 - y) * width + x) * 4;
-            
+
             const temp = grid[gridIdx];
             const diff = Math.max(0, temp - ambientTemp);
-            
+
             // Thermal camera color ramp (Black -> Blue -> Green -> Yellow -> Red)
             const intensity = Math.min(1.0, Math.sqrt(diff / 15.0));
-            
+
             let r = 0, g = 0, b = 0;
             if (intensity < 0.2) { // Dark to Blue
               b = Math.round(intensity * 5 * 255);
@@ -254,7 +254,7 @@ function App() {
           }
         }
         hCtx.putImageData(imgData, 0, 0);
-        
+
         // Draw the heatmap canvas scaled to world coordinates
         ctx.save();
         ctx.globalAlpha = 0.6;
@@ -262,7 +262,7 @@ function App() {
         const sh = height * resolution * step;
         const sx = centerX + bounds.xmin * step;
         const sy = (centerY - bounds.ymin * step) - sh;
-        
+
         ctx.drawImage(window.heatmapCanvas, sx, sy, sw, sh);
         ctx.restore();
       }
@@ -270,13 +270,13 @@ function App() {
       // 0b. Smoke Layer
       if (showSmoke && heatmapData && heatmapData.smoke_grid) {
         const { width, height, resolution, smoke_grid, bounds } = heatmapData;
-        
+
         // Find the max smoke for normalization
         let maxSmoke = 0;
         for (let i = 0; i < smoke_grid.length; i++) {
           if (smoke_grid[i] > maxSmoke) maxSmoke = smoke_grid[i];
         }
-        
+
         if (maxSmoke > 0.01) {
           if (!window.smokeCanvas || window.smokeCanvas.width !== width || window.smokeCanvas.height !== height) {
             window.smokeCanvas = document.createElement('canvas');
@@ -285,7 +285,7 @@ function App() {
           }
           const sCtx = window.smokeCanvas.getContext('2d');
           const imgData = sCtx.createImageData(width, height);
-          
+
           for (let y = 0; y < height; y++) {
             for (let x = 0; x < width; x++) {
               const gridIdx = y * width + x;
@@ -295,14 +295,14 @@ function App() {
               const normalized = Math.min(1.0, smokeVal / Math.max(maxSmoke, 1.0));
               const alpha = Math.round(Math.pow(normalized, 0.5) * 210); // max 210/255 opacity
               // Render as dark greyish smoke with slight brownish tinge
-              imgData.data[imgIdx]     = 40;   // R
+              imgData.data[imgIdx] = 40;   // R
               imgData.data[imgIdx + 1] = 38;   // G
               imgData.data[imgIdx + 2] = 36;   // B
               imgData.data[imgIdx + 3] = alpha;
             }
           }
           sCtx.putImageData(imgData, 0, 0);
-          
+
           ctx.save();
           const sw = width * resolution * step;
           const sh = height * resolution * step;
@@ -329,7 +329,7 @@ function App() {
         ctx.beginPath();
         el.points.forEach((p, i) => { const sx = centerX + p.x * step; const sy = centerY - p.y * step; if (i === 0) ctx.moveTo(sx, sy); else ctx.lineTo(sx, sy); });
         if (!el.isDrawing) ctx.closePath();
-        let strokeColor = index === selectedId ? '#ffffff' : '#3b82f6'; 
+        let strokeColor = index === selectedId ? '#ffffff' : '#3b82f6';
         let fillColor = index === selectedId ? 'rgba(255, 255, 255, 0.2)' : 'rgba(59, 130, 246, 0.1)';
         let lineDash = el.isDrawing ? [5, 5] : [];
         if (el.type === 'boundary') { strokeColor = index === selectedId ? '#ffffff' : '#a855f7'; fillColor = index === selectedId ? 'rgba(255, 255, 255, 0.2)' : 'rgba(168, 85, 247, 0.1)'; }
@@ -337,22 +337,22 @@ function App() {
         else if (el.type === 'obstacle') { strokeColor = index === selectedId ? '#ffffff' : '#71717a'; fillColor = index === selectedId ? 'rgba(255, 255, 255, 0.2)' : 'rgba(113, 113, 122, 0.1)'; if (!el.isDrawing) lineDash = [4, 4]; }
         else if (el.type === 'journey') { strokeColor = el.color || '#fbbf24'; fillColor = 'transparent'; lineDash = [5, 5]; ctx.globalAlpha = 0.4; }
         else if (el.type === 'scenario') {
-            const sx = centerX + el.points[0].x * step;
-            const sy = centerY - el.points[0].y * step;
-            ctx.beginPath(); ctx.arc(sx, sy, 8, 0, Math.PI * 2);
-            ctx.fillStyle = el.scenarioType === 'Smoke' ? 'rgba(156, 163, 175, 0.8)' : (el.scenarioType === 'Fire' ? 'rgba(239, 68, 68, 0.8)' : 'rgba(245, 158, 11, 0.8)');
-            ctx.fill(); ctx.strokeStyle = '#ffffff'; ctx.lineWidth = index === selectedId ? 3 : 1; ctx.stroke();
-            ctx.fillStyle = 'white'; ctx.font = '10px Inter'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText(el.scenarioType[0], sx, sy);
-            return;
+          const sx = centerX + el.points[0].x * step;
+          const sy = centerY - el.points[0].y * step;
+          ctx.beginPath(); ctx.arc(sx, sy, 8, 0, Math.PI * 2);
+          ctx.fillStyle = el.scenarioType === 'Smoke' ? 'rgba(156, 163, 175, 0.8)' : (el.scenarioType === 'Fire' ? 'rgba(239, 68, 68, 0.8)' : 'rgba(245, 158, 11, 0.8)');
+          ctx.fill(); ctx.strokeStyle = '#ffffff'; ctx.lineWidth = index === selectedId ? 3 : 1; ctx.stroke();
+          ctx.fillStyle = 'white'; ctx.font = '10px Inter'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText(el.scenarioType[0], sx, sy);
+          return;
         }
         else if (el.type === 'poi') {
-            const sx = centerX + el.points[0].x * step;
-            const sy = centerY - el.points[0].y * step;
-            ctx.beginPath(); ctx.arc(sx, sy, 6, 0, Math.PI * 2);
-            ctx.fillStyle = 'rgba(20, 184, 166, 0.8)'; // Teal
-            ctx.fill(); ctx.strokeStyle = '#ffffff'; ctx.lineWidth = index === selectedId ? 3 : 1; ctx.stroke();
-            ctx.fillStyle = 'white'; ctx.font = '8px Inter'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText('P', sx, sy);
-            return;
+          const sx = centerX + el.points[0].x * step;
+          const sy = centerY - el.points[0].y * step;
+          ctx.beginPath(); ctx.arc(sx, sy, 6, 0, Math.PI * 2);
+          ctx.fillStyle = 'rgba(20, 184, 166, 0.8)'; // Teal
+          ctx.fill(); ctx.strokeStyle = '#ffffff'; ctx.lineWidth = index === selectedId ? 3 : 1; ctx.stroke();
+          ctx.fillStyle = 'white'; ctx.font = '8px Inter'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText('P', sx, sy);
+          return;
         }
         ctx.setLineDash(lineDash); ctx.fillStyle = fillColor; ctx.fill(); ctx.strokeStyle = strokeColor; ctx.lineWidth = index === selectedId ? 3 : 2; ctx.stroke(); ctx.globalAlpha = 1.0;
         if (el.type === 'journey' && !el.isDrawing && el.points.length >= 2) {
@@ -368,27 +368,27 @@ function App() {
         agentTrails.forEach((pts, id) => {
           if (pts.length < 2) return;
           ctx.beginPath(); ctx.setLineDash([]); ctx.lineWidth = 1.5; ctx.lineJoin = 'round'; ctx.lineCap = 'round'; ctx.globalAlpha = 0.5;
-          
+
           pts.forEach((p, i) => {
             const sx = centerX + p.x * step; const sy = centerY - p.y * step;
-            
+
             if (i === 0) ctx.moveTo(sx, sy);
             else {
-                if (trailColorMode === 'Travel Distance') {
-                    const hue = Math.min(240, (p.totalDist / 50) * 240);
-                    ctx.strokeStyle = `hsla(${240 - hue}, 80%, 50%, 0.5)`;
-                } else if (trailColorMode === 'Distance Remaining') {
-                    const distToTarget = p.target ? Math.hypot(p.x - p.target.x, p.y - p.target.y) : 0;
-                    const hue = Math.min(240, (distToTarget / 30) * 240);
-                    ctx.strokeStyle = `hsla(${hue}, 80%, 50%, 0.5)`;
-                } else if (trailColorMode === 'Subtle Gray') {
-                    ctx.strokeStyle = 'rgba(255, 255, 255, 0.15)';
-                } else {
-                    // Same as Agent - we'd need the agent's current color, but for performance 
-                    // and clarity, we'll use a default blue if 'Same as Agent' isn't easily accessible
-                    ctx.strokeStyle = 'rgba(59, 130, 246, 0.4)';
-                }
-                ctx.lineTo(sx, sy);
+              if (trailColorMode === 'Travel Distance') {
+                const hue = Math.min(240, (p.totalDist / 50) * 240);
+                ctx.strokeStyle = `hsla(${240 - hue}, 80%, 50%, 0.5)`;
+              } else if (trailColorMode === 'Distance Remaining') {
+                const distToTarget = p.target ? Math.hypot(p.x - p.target.x, p.y - p.target.y) : 0;
+                const hue = Math.min(240, (distToTarget / 30) * 240);
+                ctx.strokeStyle = `hsla(${hue}, 80%, 50%, 0.5)`;
+              } else if (trailColorMode === 'Subtle Gray') {
+                ctx.strokeStyle = 'rgba(255, 255, 255, 0.15)';
+              } else {
+                // Same as Agent - we'd need the agent's current color, but for performance 
+                // and clarity, we'll use a default blue if 'Same as Agent' isn't easily accessible
+                ctx.strokeStyle = 'rgba(59, 130, 246, 0.4)';
+              }
+              ctx.lineTo(sx, sy);
             }
           });
           ctx.stroke(); ctx.globalAlpha = 1.0;
@@ -398,78 +398,85 @@ function App() {
       // 3. Agents
       agents.forEach(agent => {
         const sx = centerX + agent.x * step; const sy = centerY - agent.y * step;
-        const radius = (agent.type === 'child' ? 0.15 : 0.2) * step; 
+        const radius = (agent.type === 'child' ? 0.15 : 0.2) * step;
         const fatigue = agent.fatigue || 0;
-        
+
         let color = '#3b82f6'; // Male
         if (agent.type === 'female') color = '#ec4899';
         else if (agent.type === 'child') color = '#eab308';
-        
+
         if (colorMode === 'Color by Start') {
-            const hue = (agent.start_id * 137.5) % 360;
-            color = `hsl(${hue}, 70%, 60%)`;
+          const hue = (agent.start_id * 137.5) % 360;
+          color = `hsl(${hue}, 70%, 60%)`;
         } else if (colorMode === 'Color by Exit') {
-            const hue = (agent.stage_id * 137.5) % 360;
-            color = `hsl(${hue}, 70%, 60%)`;
+          const hue = (agent.stage_id * 137.5) % 360;
+          color = `hsl(${hue}, 70%, 60%)`;
         } else if (colorMode === 'Dominant OCEAN Trait') {
-            const traitColors = {
-                'openness': '#3b82f6',
-                'conscientiousness': '#10b981',
-                'extraversion': '#f59e0b',
-                'agreeableness': '#06b6d4',
-                'neuroticism': '#ef4444'
-            };
-            color = traitColors[agent.dominant_trait] || color;
+          const traitColors = {
+            'openness': '#3b82f6',
+            'conscientiousness': '#10b981',
+            'extraversion': '#f59e0b',
+            'agreeableness': '#06b6d4',
+            'neuroticism': '#ef4444'
+          };
+          color = traitColors[agent.dominant_trait] || color;
         } else if (colorMode === 'Stress Level') {
-            const stress = agent.stress || 0;
-            const r = Math.min(255, Math.floor(stress * 255 * 2));
-            const g = Math.min(255, Math.floor((1 - stress) * 255));
-            color = `rgb(${r}, ${g}, 50)`;
+          const stress = agent.stress || 0;
+          const r = Math.min(255, Math.floor(stress * 255 * 2));
+          const g = Math.min(255, Math.floor((1 - stress) * 255));
+          color = `rgb(${r}, ${g}, 50)`;
         } else if (colorMode === 'Panic Level') {
-            const panic = agent.panic || 0;
-            const r = Math.min(255, Math.floor(panic * 255 * 2));
-            const g = Math.min(255, Math.floor((1 - panic) * 255));
-            color = `rgb(${r}, ${g}, 50)`;
+          console.log('Agents panic levels:', agents.map(a => ({ id: a.id, panic: a.panic })));
+          const panic = Math.min(1.0, (agent.panic || 0) * 1.5);
+          if (panic > 0.8) {
+            color = '#ff0000'; // Bright red for high panic
+          } else if (panic > 0.5) {
+            color = '#ff6600'; // Orange for medium panic
+          } else if (panic > 0.2) {
+            color = '#ffcc00'; // Yellow for low panic
+          } else {
+            color = '#00ff00'; // Green for calm
+          }
         } else if (colorMode === 'Heartbeat') {
-            const hb = agent.heartbeat || 70;
-            const normalized = Math.min(1, Math.max(0, (hb - 60) / 40)); // 60-100 range
-            const r = Math.min(255, Math.floor(normalized * 255));
-            const b = Math.min(255, Math.floor((1 - normalized) * 255));
-            color = `rgb(${r}, 50, ${b})`;
+          const hb = agent.heartbeat || 70;
+          const normalized = Math.min(1, Math.max(0, (hb - 60) / 40)); // 60-100 range
+          const r = Math.min(255, Math.floor(normalized * 255));
+          const b = Math.min(255, Math.floor((1 - normalized) * 255));
+          color = `rgb(${r}, 50, ${b})`;
         } else if (fatigue > 0.1) {
-            const r = Math.min(255, Math.floor(fatigue * 255));
-            const g = Math.min(255, Math.floor((1 - fatigue) * 255));
-            color = `rgb(${r}, ${g}, 50)`;
+          const r = Math.min(255, Math.floor(fatigue * 255));
+          const g = Math.min(255, Math.floor((1 - fatigue) * 255));
+          color = `rgb(${r}, ${g}, 50)`;
         }
 
         ctx.beginPath();
         if (agent.type === 'female') {
-            // Triangle
-            ctx.moveTo(sx, sy - radius);
-            ctx.lineTo(sx - radius * 0.9, sy + radius * 0.7);
-            ctx.lineTo(sx + radius * 0.9, sy + radius * 0.7);
-            ctx.closePath();
+          // Triangle
+          ctx.moveTo(sx, sy - radius);
+          ctx.lineTo(sx - radius * 0.9, sy + radius * 0.7);
+          ctx.lineTo(sx + radius * 0.9, sy + radius * 0.7);
+          ctx.closePath();
         } else if (agent.type === 'child') {
-            // Square
-            ctx.rect(sx - radius, sy - radius, radius * 2, radius * 2);
+          // Square
+          ctx.rect(sx - radius, sy - radius, radius * 2, radius * 2);
         } else {
-            // Circle (Male)
-            ctx.arc(sx, sy, radius, 0, Math.PI * 2);
+          // Circle (Male)
+          ctx.arc(sx, sy, radius, 0, Math.PI * 2);
         }
 
         ctx.fillStyle = color; ctx.fill();
         ctx.strokeStyle = 'white'; ctx.lineWidth = 1; ctx.stroke();
-        
+
         // Label for clarity at low fatigue
         if (fatigue < 0.3) {
-            ctx.fillStyle = 'white';
-            ctx.font = `${radius * 0.7}px Inter`;
-            ctx.textAlign = 'center';
-            ctx.textBaseline = 'middle';
-            const char = agent.type ? agent.type[0].toUpperCase() : 'M';
-            // Adjust label Y for triangle
-            const labelY = agent.type === 'female' ? sy + radius * 0.2 : sy;
-            ctx.fillText(char, sx, labelY);
+          ctx.fillStyle = 'white';
+          ctx.font = `${radius * 0.7}px Inter`;
+          ctx.textAlign = 'center';
+          ctx.textBaseline = 'middle';
+          const char = agent.type ? agent.type[0].toUpperCase() : 'M';
+          // Adjust label Y for triangle
+          const labelY = agent.type === 'female' ? sy + radius * 0.2 : sy;
+          ctx.fillText(char, sx, labelY);
         }
       });
 
@@ -492,22 +499,22 @@ function App() {
   }, [transform, elements, drawingPoints, mousePos, activeTool, selectedId, agents, showTrails, colorMode, agentTrails, showHeatmap, showSmoke, heatmapData, ambientTemp]);
 
   const deleteSelected = () => { if (selectedId === null) return; saveToHistory(elements); setElements(prev => prev.filter((_, i) => i !== selectedId)); setSelectedId(null); };
-  const finalizeDrawing = () => { 
-    if (drawingPoints.length > 2) { 
-        saveToHistory(elements); 
-        const type = activeTool.toLowerCase(); 
-        const newEl = { 
-            id: elements.length,
-            type, 
-            points: drawingPoints, 
-            agentCount: type === 'start' ? 10 : 0 
-        };
-        if (type === 'start') {
-            newEl.crowdComposition = { male: 50, female: 50, child: 0 };
-        }
-        setElements(prev => [...prev, newEl]); 
-    } 
-    setDrawingPoints([]); 
+  const finalizeDrawing = () => {
+    if (drawingPoints.length > 2) {
+      saveToHistory(elements);
+      const type = activeTool.toLowerCase();
+      const newEl = {
+        id: elements.length,
+        type,
+        points: drawingPoints,
+        agentCount: type === 'start' ? 10 : 0
+      };
+      if (type === 'start') {
+        newEl.crowdComposition = { male: 50, female: 50, child: 0 };
+      }
+      setElements(prev => [...prev, newEl]);
+    }
+    setDrawingPoints([]);
   };
 
   const handleWheel = (e) => { const zoomIntensity = 0.1; const delta = e.deltaY > 0 ? 1 - zoomIntensity : 1 + zoomIntensity; setTransform(prev => ({ ...prev, scale: Math.min(Math.max(prev.scale * delta, 2), 200) })); };
@@ -515,18 +522,18 @@ function App() {
     const pos = screenToSim(e.clientX, e.clientY, e.ctrlKey);
     if (e.button === 1) { setIsPanning(true); setStartPan({ x: e.clientX - transform.x, y: e.clientY - transform.y }); return; }
     if (e.button === 0) {
-      if (activeTool === 'Select') { 
-        let foundIndex = null; 
-        for (let i = elements.length - 1; i >= 0; i--) { if (isPointInPoly(pos, elements[i].points)) { foundIndex = i; break; } } 
-        setSelectedId(foundIndex); 
+      if (activeTool === 'Select') {
+        let foundIndex = null;
+        for (let i = elements.length - 1; i >= 0; i--) { if (isPointInPoly(pos, elements[i].points)) { foundIndex = i; break; } }
+        setSelectedId(foundIndex);
         if (foundIndex !== null) setLeftTab('Selection');
       }
-      else if (activeTool === 'Move') { 
-        if (selectedId !== null && isPointInPoly(pos, elements[selectedId].points)) setDragStart({ x: pos.x, y: pos.y }); 
-        else { 
-            setIsPanning(true); 
-            setStartPan({ x: e.clientX - transform.x, y: e.clientY - transform.y }); 
-        } 
+      else if (activeTool === 'Move') {
+        if (selectedId !== null && isPointInPoly(pos, elements[selectedId].points)) setDragStart({ x: pos.x, y: pos.y });
+        else {
+          setIsPanning(true);
+          setStartPan({ x: e.clientX - transform.x, y: e.clientY - transform.y });
+        }
       }
       else if (activeTool === 'Journey') {
         let foundIndex = null; for (let i = elements.length - 1; i >= 0; i--) { if (isPointInPoly(pos, elements[i].points)) { foundIndex = i; break; } }
@@ -541,11 +548,11 @@ function App() {
         }
       } else if (activeTool === 'ScenarioPoint') {
         saveToHistory(elements);
-        setElements(prev => [...prev, { id: elements.length, type: 'scenario', scenarioType: scenarioType, points: [{x: Number(pos.x), y: Number(pos.y)}] }]);
+        setElements(prev => [...prev, { id: elements.length, type: 'scenario', scenarioType: scenarioType, points: [{ x: Number(pos.x), y: Number(pos.y) }] }]);
         setActiveTool('Select');
       } else if (activeTool === 'POI') {
         saveToHistory(elements);
-        setElements(prev => [...prev, { id: elements.length, type: 'poi', points: [{x: Number(pos.x), y: Number(pos.y)}] }]);
+        setElements(prev => [...prev, { id: elements.length, type: 'poi', points: [{ x: Number(pos.x), y: Number(pos.y) }] }]);
         setActiveTool('Select');
       } else if (['Boundary', 'Exit', 'Obstacle', 'Start'].includes(activeTool)) setDrawingPoints(prev => [...prev, pos]);
     }
@@ -608,9 +615,9 @@ function App() {
         </div>
         <div className="toolbar-group" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
           <div className="duration-input" style={{ display: 'flex', alignItems: 'center', background: 'var(--glass)', border: '1px solid var(--border-light)', borderRadius: '4px', padding: '0 8px' }}>
-             <Clock size={12} color="#aaa" />
-             <input type="number" value={simDuration} onChange={(e) => setSimDuration(parseInt(e.target.value))} style={{ width: '50px', background: 'none', border: 'none', color: 'white', fontSize: '11px', padding: '4px' }} />
-             <span style={{ fontSize: '10px', color: '#888' }}>sec</span>
+            <Clock size={12} color="#aaa" />
+            <input type="number" value={simDuration} onChange={(e) => setSimDuration(parseInt(e.target.value))} style={{ width: '50px', background: 'none', border: 'none', color: 'white', fontSize: '11px', padding: '4px' }} />
+            <span style={{ fontSize: '10px', color: '#888' }}>sec</span>
           </div>
           <button className={`toolbar-btn ${isSimulating && !playbackMode ? 'active' : ''}`} style={{ backgroundColor: (isSimulating && !playbackMode) ? '#ef4444' : '#3b82f6' }} onClick={isSimulating ? stopSimulation : startSimulation}>{(isSimulating && !playbackMode) ? 'Stop' : 'Calculate'}</button>
         </div>
@@ -618,307 +625,307 @@ function App() {
       </header>
       <main className="viewport-container">
         <div className={`config-sidebar ${showConfigPanel ? 'open' : 'closed'}`}>
-            <button className="panel-toggle" onClick={() => setShowConfigPanel(!showConfigPanel)}> {showConfigPanel ? <ChevronLeft size={16} /> : <ChevronRight size={16} />} </button>
-            
-            <div className="sidebar-tabs">
-                <button className={`tab-btn ${leftTab === 'Crowd' ? 'active' : ''}`} onClick={() => setLeftTab('Crowd')}>
-                    <Users size={14} /> Crowd
-                </button>
-                <button className={`tab-btn ${leftTab === 'Selection' ? 'active' : ''}`} onClick={() => setLeftTab('Selection')}>
-                    <Sliders size={14} /> Selection
-                </button>
-                <button className={`tab-btn ${leftTab === 'Scenario' ? 'active' : ''}`} onClick={() => setLeftTab('Scenario')}>
-                    <Zap size={14} /> Scenario
-                </button>
-            </div>
+          <button className="panel-toggle" onClick={() => setShowConfigPanel(!showConfigPanel)}> {showConfigPanel ? <ChevronLeft size={16} /> : <ChevronRight size={16} />} </button>
 
-            <div className="sidebar-content">
-                {leftTab === 'Crowd' && (
-                    <>
-                        <div className="panel-section">
-                            <h3><MapPin size={16} color="var(--accent)" /> Start Areas</h3>
-                            <div className="start-areas-list" style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                                {elements.filter(el => el.type === 'start').map((el, i) => (
-                                    <button key={el.id} className={`toolbar-btn ${selectedId === el.id ? 'active' : ''}`} 
-                                        style={{ justifyContent: 'space-between', width: '100%', padding: '10px' }}
-                                        onClick={() => { setSelectedId(el.id); setLeftTab('Selection'); }}
-                                    >
-                                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                                            <Shield size={12} />
-                                            <span>Start Area {el.id}</span>
-                                        </div>
-                                        <div style={{ fontSize: '10px', color: 'var(--text-muted)' }}>
-                                            {el.agentCount || 10} agents
-                                        </div>
-                                    </button>
-                                ))}
-                                {elements.filter(el => el.type === 'start').length === 0 && (
-                                    <div style={{ fontSize: '11px', color: 'var(--text-muted)', textAlign: 'center', padding: '10px', background: 'rgba(255,255,255,0.02)', borderRadius: '6px' }}>
-                                        No start areas defined
-                                    </div>
-                                )}
-                            </div>
+          <div className="sidebar-tabs">
+            <button className={`tab-btn ${leftTab === 'Crowd' ? 'active' : ''}`} onClick={() => setLeftTab('Crowd')}>
+              <Users size={14} /> Crowd
+            </button>
+            <button className={`tab-btn ${leftTab === 'Selection' ? 'active' : ''}`} onClick={() => setLeftTab('Selection')}>
+              <Sliders size={14} /> Selection
+            </button>
+            <button className={`tab-btn ${leftTab === 'Scenario' ? 'active' : ''}`} onClick={() => setLeftTab('Scenario')}>
+              <Zap size={14} /> Scenario
+            </button>
+          </div>
+
+          <div className="sidebar-content">
+            {leftTab === 'Crowd' && (
+              <>
+                <div className="panel-section">
+                  <h3><MapPin size={16} color="var(--accent)" /> Start Areas</h3>
+                  <div className="start-areas-list" style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                    {elements.filter(el => el.type === 'start').map((el, i) => (
+                      <button key={el.id} className={`toolbar-btn ${selectedId === el.id ? 'active' : ''}`}
+                        style={{ justifyContent: 'space-between', width: '100%', padding: '10px' }}
+                        onClick={() => { setSelectedId(el.id); setLeftTab('Selection'); }}
+                      >
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                          <Shield size={12} />
+                          <span>Start Area {el.id}</span>
                         </div>
-
-                        <div className="panel-section">
-                            <h3><Activity size={16} color="var(--accent)" /> OCEAN Traits</h3>
-                            {Object.keys(oceanComposition).map(trait => (
-                                <div className="panel-field" key={trait}>
-                                    <label style={{ textTransform: 'capitalize' }}>{trait} (%)</label>
-                                    <input type="range" min="0" max="100" value={oceanComposition[trait]} onChange={(e) => {
-                                        setOceanComposition(prev => ({ ...prev, [trait]: parseInt(e.target.value) }));
-                                    }} />
-                                    <div style={{ fontSize: '10px', textAlign: 'right' }}>{oceanComposition[trait]}%</div>
-                                </div>
-                            ))}
+                        <div style={{ fontSize: '10px', color: 'var(--text-muted)' }}>
+                          {el.agentCount || 10} agents
                         </div>
-                    </>
-                )}
+                      </button>
+                    ))}
+                    {elements.filter(el => el.type === 'start').length === 0 && (
+                      <div style={{ fontSize: '11px', color: 'var(--text-muted)', textAlign: 'center', padding: '10px', background: 'rgba(255,255,255,0.02)', borderRadius: '6px' }}>
+                        No start areas defined
+                      </div>
+                    )}
+                  </div>
+                </div>
 
-                {leftTab === 'Selection' && (
-                    <div className="panel-section">
-                        {selectedId !== null ? (
-                            <>
-                                {elements.find(el => el.id === selectedId)?.type === 'start' ? (
-                                    <>
-                                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '15px', color: '#3b82f6' }}>
-                                            <Shield size={16} />
-                                            <h3 style={{ margin: 0 }}>Start Area {selectedId}</h3>
-                                        </div>
-                                        <div className="panel-field">
-                                            <label>Agent Count</label>
-                                            <input type="number" value={elements.find(el => el.id === selectedId).agentCount || 10} onChange={(e) => {
-                                                const val = parseInt(e.target.value) || 0;
-                                                setElements(prev => prev.map(el => el.id === selectedId ? { ...el, agentCount: val } : el));
-                                            }} />
-                                        </div>
-                                        
-                                        <h4 style={{ fontSize: '12px', color: 'var(--text-main)', marginTop: '20px', marginBottom: '12px', display: 'flex', alignItems: 'center', gap: '8px' }}>
-                                            <Users size={14} color="var(--accent)" /> Crowd Composition
-                                        </h4>
-                                        {['male', 'female', 'child'].map(type => (
-                                            <div className="panel-field" key={type}>
-                                                <label style={{ textTransform: 'capitalize' }}>{type} (%)</label>
-                                                <input type="range" min="0" max="100" 
-                                                    value={elements.find(el => el.id === selectedId).crowdComposition?.[type] || 0} 
-                                                    onChange={(e) => {
-                                                        const val = parseInt(e.target.value);
-                                                        const el = elements.find(el => el.id === selectedId);
-                                                        const currentComp = el.crowdComposition || { male: 50, female: 50, child: 0 };
-                                                        const newComp = { ...currentComp, [type]: val };
-                                                        setElements(prev => prev.map(e => e.id === selectedId ? { ...e, crowdComposition: newComp } : e));
-                                                    }} 
-                                                />
-                                                <div style={{ fontSize: '10px', textAlign: 'right' }}>
-                                                    {elements.find(el => el.id === selectedId).crowdComposition?.[type] || 0}%
-                                                </div>
-                                            </div>
-                                        ))}
-                                        <div style={{ fontSize: '10px', color: '#888', marginBottom: '10px' }}>
-                                            Configure demographics for this specific entry point.
-                                        </div>
-                                    </>
-                                ) : (
-                                    <div style={{ textAlign: 'center', padding: '40px 20px', color: 'var(--text-muted)' }}>
-                                        <Box size={32} style={{ marginBottom: '16px', opacity: 0.5 }} />
-                                        <p>Element {selectedId} selected. No specific properties available.</p>
-                                    </div>
-                                )}
-                            </>
-                        ) : (
-                            <div style={{ textAlign: 'center', padding: '40px 20px', color: 'var(--text-muted)' }}>
-                                <MousePointer2 size={32} style={{ marginBottom: '16px', opacity: 0.5 }} />
-                                <p>Select an element on the canvas to view its properties.</p>
-                            </div>
-                        )}
+                <div className="panel-section">
+                  <h3><Activity size={16} color="var(--accent)" /> OCEAN Traits</h3>
+                  {Object.keys(oceanComposition).map(trait => (
+                    <div className="panel-field" key={trait}>
+                      <label style={{ textTransform: 'capitalize' }}>{trait} (%)</label>
+                      <input type="range" min="0" max="100" value={oceanComposition[trait]} onChange={(e) => {
+                        setOceanComposition(prev => ({ ...prev, [trait]: parseInt(e.target.value) }));
+                      }} />
+                      <div style={{ fontSize: '10px', textAlign: 'right' }}>{oceanComposition[trait]}%</div>
                     </div>
-                )}
+                  ))}
+                </div>
+              </>
+            )}
 
-                {leftTab === 'Scenario' && (
-                    <div className="panel-section">
-                        <h3><Zap size={16} color="var(--accent)" /> Scenarios</h3>
+            {leftTab === 'Selection' && (
+              <div className="panel-section">
+                {selectedId !== null ? (
+                  <>
+                    {elements.find(el => el.id === selectedId)?.type === 'start' ? (
+                      <>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '15px', color: '#3b82f6' }}>
+                          <Shield size={16} />
+                          <h3 style={{ margin: 0 }}>Start Area {selectedId}</h3>
+                        </div>
                         <div className="panel-field">
-                            <label>Type</label>
-                            <select value={scenarioType} onChange={(e) => setScenarioType(e.target.value)}>
-                                <option>Smoke</option>
-                                <option>Fire</option>
-                                <option>Burst</option>
-                            </select>
-                        </div>
-                        <button className={`toolbar-btn ${activeTool === 'ScenarioPoint' ? 'active' : ''}`} onClick={() => setActiveTool('ScenarioPoint')} style={{ width: '100%', marginBottom: '15px', justifyContent: 'center' }}>
-                            <MapPin size={14} style={{ marginRight: '8px' }} /> Place Source
-                        </button>
-                        
-                        <h4 style={{ fontSize: '12px', color: 'var(--text-main)', marginTop: '20px', marginBottom: '8px' }}>Active Sources</h4>
-                        <div className="start-areas-list" style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                            {elements.filter(el => el.type === 'scenario').map((el, i) => (
-                                <button key={el.id} className="toolbar-btn" style={{ justifyContent: 'space-between', width: '100%', padding: '10px' }} onClick={() => { setSelectedId(el.id); setLeftTab('Selection'); }}>
-                                    <span>{el.scenarioType} Source</span>
-                                    <Trash2 size={12} onClick={(e) => { e.stopPropagation(); setElements(prev => prev.filter(e => e.id !== el.id)); }} />
-                                </button>
-                            ))}
-                            {elements.filter(el => el.type === 'scenario').length === 0 && (
-                                <div style={{ fontSize: '11px', color: 'var(--text-muted)', textAlign: 'center', padding: '10px', background: 'rgba(255,255,255,0.02)', borderRadius: '6px' }}>
-                                    No active sources
-                                </div>
-                            )}
+                          <label>Agent Count</label>
+                          <input type="number" value={elements.find(el => el.id === selectedId).agentCount || 10} onChange={(e) => {
+                            const val = parseInt(e.target.value) || 0;
+                            setElements(prev => prev.map(el => el.id === selectedId ? { ...el, agentCount: val } : el));
+                          }} />
                         </div>
 
-                        <div className="panel-section" style={{ marginTop: '20px', padding: 0, border: 'none' }}>
-                            <h4 style={{ fontSize: '12px', color: 'var(--text-main)', marginBottom: '8px' }}>Simulation Modes</h4>
-                            <div className="panel-field">
-                                <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer' }}>
-                                    <input type="checkbox" checked={loiterMode} onChange={(e) => setLoiterMode(e.target.checked)} />
-                                    <span>Loiter Mode (Wander POIs)</span>
-                                </label>
+                        <h4 style={{ fontSize: '12px', color: 'var(--text-main)', marginTop: '20px', marginBottom: '12px', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                          <Users size={14} color="var(--accent)" /> Crowd Composition
+                        </h4>
+                        {['male', 'female', 'child'].map(type => (
+                          <div className="panel-field" key={type}>
+                            <label style={{ textTransform: 'capitalize' }}>{type} (%)</label>
+                            <input type="range" min="0" max="100"
+                              value={elements.find(el => el.id === selectedId).crowdComposition?.[type] || 0}
+                              onChange={(e) => {
+                                const val = parseInt(e.target.value);
+                                const el = elements.find(el => el.id === selectedId);
+                                const currentComp = el.crowdComposition || { male: 50, female: 50, child: 0 };
+                                const newComp = { ...currentComp, [type]: val };
+                                setElements(prev => prev.map(e => e.id === selectedId ? { ...e, crowdComposition: newComp } : e));
+                              }}
+                            />
+                            <div style={{ fontSize: '10px', textAlign: 'right' }}>
+                              {elements.find(el => el.id === selectedId).crowdComposition?.[type] || 0}%
                             </div>
-                            <div className="panel-field" style={{ marginTop: '10px' }}>
-                                <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer' }}>
-                                    <input type="checkbox" checked={emergencyMode} onChange={(e) => setEmergencyMode(e.target.checked)} />
-                                    <span>Emergency Mode (Fire Alarm)</span>
-                                </label>
-                            </div>
-                            {emergencyMode && (
-                                <div className="panel-field" style={{ marginTop: '10px', marginLeft: '24px' }}>
-                                    <label>Trigger Time (s)</label>
-                                    <input type="range" min="0" max={simDuration} value={emergencyTriggerTime} onChange={(e) => setEmergencyTriggerTime(parseInt(e.target.value))} />
-                                    <div style={{ fontSize: '10px', textAlign: 'right' }}>{emergencyTriggerTime}s</div>
-                                </div>
-                            )}
+                          </div>
+                        ))}
+                        <div style={{ fontSize: '10px', color: '#888', marginBottom: '10px' }}>
+                          Configure demographics for this specific entry point.
                         </div>
-                    </div>
+                      </>
+                    ) : (
+                      <div style={{ textAlign: 'center', padding: '40px 20px', color: 'var(--text-muted)' }}>
+                        <Box size={32} style={{ marginBottom: '16px', opacity: 0.5 }} />
+                        <p>Element {selectedId} selected. No specific properties available.</p>
+                      </div>
+                    )}
+                  </>
+                ) : (
+                  <div style={{ textAlign: 'center', padding: '40px 20px', color: 'var(--text-muted)' }}>
+                    <MousePointer2 size={32} style={{ marginBottom: '16px', opacity: 0.5 }} />
+                    <p>Select an element on the canvas to view its properties.</p>
+                  </div>
                 )}
-            </div>
+              </div>
+            )}
+
+            {leftTab === 'Scenario' && (
+              <div className="panel-section">
+                <h3><Zap size={16} color="var(--accent)" /> Scenarios</h3>
+                <div className="panel-field">
+                  <label>Type</label>
+                  <select value={scenarioType} onChange={(e) => setScenarioType(e.target.value)}>
+                    <option>Smoke</option>
+                    <option>Fire</option>
+                    <option>Burst</option>
+                  </select>
+                </div>
+                <button className={`toolbar-btn ${activeTool === 'ScenarioPoint' ? 'active' : ''}`} onClick={() => setActiveTool('ScenarioPoint')} style={{ width: '100%', marginBottom: '15px', justifyContent: 'center' }}>
+                  <MapPin size={14} style={{ marginRight: '8px' }} /> Place Source
+                </button>
+
+                <h4 style={{ fontSize: '12px', color: 'var(--text-main)', marginTop: '20px', marginBottom: '8px' }}>Active Sources</h4>
+                <div className="start-areas-list" style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                  {elements.filter(el => el.type === 'scenario').map((el, i) => (
+                    <button key={el.id} className="toolbar-btn" style={{ justifyContent: 'space-between', width: '100%', padding: '10px' }} onClick={() => { setSelectedId(el.id); setLeftTab('Selection'); }}>
+                      <span>{el.scenarioType} Source</span>
+                      <Trash2 size={12} onClick={(e) => { e.stopPropagation(); setElements(prev => prev.filter(e => e.id !== el.id)); }} />
+                    </button>
+                  ))}
+                  {elements.filter(el => el.type === 'scenario').length === 0 && (
+                    <div style={{ fontSize: '11px', color: 'var(--text-muted)', textAlign: 'center', padding: '10px', background: 'rgba(255,255,255,0.02)', borderRadius: '6px' }}>
+                      No active sources
+                    </div>
+                  )}
+                </div>
+
+                <div className="panel-section" style={{ marginTop: '20px', padding: 0, border: 'none' }}>
+                  <h4 style={{ fontSize: '12px', color: 'var(--text-main)', marginBottom: '8px' }}>Simulation Modes</h4>
+                  <div className="panel-field">
+                    <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer' }}>
+                      <input type="checkbox" checked={loiterMode} onChange={(e) => setLoiterMode(e.target.checked)} />
+                      <span>Loiter Mode (Wander POIs)</span>
+                    </label>
+                  </div>
+                  <div className="panel-field" style={{ marginTop: '10px' }}>
+                    <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer' }}>
+                      <input type="checkbox" checked={emergencyMode} onChange={(e) => setEmergencyMode(e.target.checked)} />
+                      <span>Emergency Mode (Fire Alarm)</span>
+                    </label>
+                  </div>
+                  {emergencyMode && (
+                    <div className="panel-field" style={{ marginTop: '10px', marginLeft: '24px' }}>
+                      <label>Trigger Time (s)</label>
+                      <input type="range" min="0" max={simDuration} value={emergencyTriggerTime} onChange={(e) => setEmergencyTriggerTime(parseInt(e.target.value))} />
+                      <div style={{ fontSize: '10px', textAlign: 'right' }}>{emergencyTriggerTime}s</div>
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+          </div>
         </div>
         <canvas ref={canvasRef} onWheel={handleWheel} onMouseDown={handleMouseDown} onMouseMove={handleMouseMove} onMouseUp={handleMouseUp} onMouseLeave={handleMouseUp} onContextMenu={handleContextMenu} style={{ cursor: activeTool === 'Move' ? 'grab' : 'crosshair' }} />
         <div className={`viz-sidebar ${showRightPanel ? 'open' : 'closed'}`}>
-            <button className="panel-toggle" onClick={() => setShowRightPanel(!showRightPanel)}> {showRightPanel ? <ChevronRight size={16} /> : <ChevronLeft size={16} />} </button>
-            
-            <div className="sidebar-tabs">
-                <button className={`tab-btn ${rightTab === 'Visuals' ? 'active' : ''}`} onClick={() => setRightTab('Visuals')}>
-                    <Eye size={14} /> Visuals
-                </button>
-                <button className={`tab-btn ${rightTab === 'Environment' ? 'active' : ''}`} onClick={() => setRightTab('Environment')}>
-                    <Cloud size={14} /> Env
-                </button>
-                <button className={`tab-btn ${rightTab === 'Stats' ? 'active' : ''}`} onClick={() => setRightTab('Stats')}>
-                    <BarChart3 size={14} /> Stats
-                </button>
-            </div>
+          <button className="panel-toggle" onClick={() => setShowRightPanel(!showRightPanel)}> {showRightPanel ? <ChevronRight size={16} /> : <ChevronLeft size={16} />} </button>
 
-            <div className="sidebar-content">
-                {rightTab === 'Visuals' && (
-                    <div className="panel-section">
-                        <h3><Zap size={16} color="var(--accent)" /> Agent Coloring</h3>
-                        <div className="panel-field">
-                            <label>Color Mode</label>
-                            <select value={colorMode} onChange={(e) => setColorMode(e.target.value)}>
-                                <option>Uniform Color</option> 
-                                <option>Color by Start</option> 
-                                <option>Color by Exit</option> 
-                                <option>Dominant OCEAN Trait</option>
-                                <option>Stress Level</option>
-                                <option>Panic Level</option>
-                                <option>Heartbeat</option>
-                                <option>Travel Distance (Total)</option> 
-                                <option>Distance Remaining</option>
-                            </select>
-                        </div>
-                        <div className="panel-toggle-group">
-                            <label className="toggle-item"> <input type="checkbox" checked={showTrails} onChange={(e) => setShowTrails(e.target.checked)} /> <span>Agent Trails</span> </label>
-                            {showTrails && (
-                                <div className="panel-field" style={{ marginLeft: '24px', marginTop: '8px' }}>
-                                    <label>Trail Color Mode</label>
-                                    <select value={trailColorMode} onChange={(e) => setTrailColorMode(e.target.value)} style={{ fontSize: '11px', padding: '4px' }}>
-                                        <option>Travel Distance</option>
-                                        <option>Distance Remaining</option>
-                                        <option>Subtle Gray</option>
-                                        <option>Standard Blue</option>
-                                    </select>
-                                </div>
-                            )}
-                            <label className="toggle-item"> <input type="checkbox" /> <span>Contour Overlay</span> </label>
-                            <label className="toggle-item"> <input type="checkbox" /> <span>Stage Labels</span> </label>
-                        </div>
-                        {colorMode === 'Travel Distance (Total)' && ( <div className="legend-container"> <div className="legend-bar" /> <div className="legend-labels"> <span>0.0</span> <span>23.6 m</span> </div> </div> )}
-                        {trailColorMode === 'Travel Distance' && showTrails && ( <div className="legend-container" style={{ marginTop: '10px' }}> <div className="legend-bar" /> <div className="legend-labels"> <span>Short Trail</span> <span>Long Trail</span> </div> </div> )}
-                    </div>
-                )}
+          <div className="sidebar-tabs">
+            <button className={`tab-btn ${rightTab === 'Visuals' ? 'active' : ''}`} onClick={() => setRightTab('Visuals')}>
+              <Eye size={14} /> Visuals
+            </button>
+            <button className={`tab-btn ${rightTab === 'Environment' ? 'active' : ''}`} onClick={() => setRightTab('Environment')}>
+              <Cloud size={14} /> Env
+            </button>
+            <button className={`tab-btn ${rightTab === 'Stats' ? 'active' : ''}`} onClick={() => setRightTab('Stats')}>
+              <BarChart3 size={14} /> Stats
+            </button>
+          </div>
 
-                {rightTab === 'Environment' && (
-                    <div className="panel-section">
-                        <h3><Cloud size={16} color="var(--accent)" /> Weather Panel</h3>
-                        <div className="panel-field">
-                            <label>Ambient Temp (°C)</label>
-                            <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                                <input 
-                                    type="range" 
-                                    min="-10" 
-                                    max="50" 
-                                    value={ambientTemp} 
-                                    onChange={(e) => setAmbientTemp(parseFloat(e.target.value))} 
-                                    style={{ flex: 1 }}
-                                />
-                                <span style={{ minWidth: '40px', textAlign: 'right' }}>{ambientTemp}°</span>
-                            </div>
-                        </div>
-                        <div className="panel-toggle-group">
-                            <label className="toggle-item"> 
-                                <input type="checkbox" checked={showHeatmap} onChange={(e) => setShowHeatmap(e.target.checked)} /> 
-                                <span>Show Heat Map</span> 
-                            </label>
-                            <label className="toggle-item"> 
-                                <input type="checkbox" checked={showSmoke} onChange={(e) => setShowSmoke(e.target.checked)} /> 
-                                <span>Show Smoke</span> 
-                            </label>
-                        </div>
-                        {showHeatmap && (
-                            <div className="legend-container">
-                                <div className="legend-bar" style={{ background: 'linear-gradient(to right, blue, green, yellow, red)' }} />
-                                <div className="legend-labels">
-                                    <span>{ambientTemp}°C</span>
-                                    <span>{ambientTemp + 20}°C</span>
-                                </div>
-                            </div>
-                        )}
-                        {showSmoke && (
-                            <div className="legend-container" style={{ marginTop: '8px' }}>
-                                <div className="legend-bar" style={{ background: 'linear-gradient(to right, rgba(40,38,36,0), rgba(40,38,36,0.5), rgba(40,38,36,1))' }} />
-                                <div className="legend-labels">
-                                    <span>No Smoke</span>
-                                    <span>Dense Smoke</span>
-                                </div>
-                            </div>
-                        )}
+          <div className="sidebar-content">
+            {rightTab === 'Visuals' && (
+              <div className="panel-section">
+                <h3><Zap size={16} color="var(--accent)" /> Agent Coloring</h3>
+                <div className="panel-field">
+                  <label>Color Mode</label>
+                  <select value={colorMode} onChange={(e) => setColorMode(e.target.value)}>
+                    <option>Uniform Color</option>
+                    <option>Color by Start</option>
+                    <option>Color by Exit</option>
+                    <option>Dominant OCEAN Trait</option>
+                    <option>Stress Level</option>
+                    <option>Panic Level</option>
+                    <option>Heartbeat</option>
+                    <option>Travel Distance (Total)</option>
+                    <option>Distance Remaining</option>
+                  </select>
+                </div>
+                <div className="panel-toggle-group">
+                  <label className="toggle-item"> <input type="checkbox" checked={showTrails} onChange={(e) => setShowTrails(e.target.checked)} /> <span>Agent Trails</span> </label>
+                  {showTrails && (
+                    <div className="panel-field" style={{ marginLeft: '24px', marginTop: '8px' }}>
+                      <label>Trail Color Mode</label>
+                      <select value={trailColorMode} onChange={(e) => setTrailColorMode(e.target.value)} style={{ fontSize: '11px', padding: '4px' }}>
+                        <option>Travel Distance</option>
+                        <option>Distance Remaining</option>
+                        <option>Subtle Gray</option>
+                        <option>Standard Blue</option>
+                      </select>
                     </div>
-                )}
+                  )}
+                  <label className="toggle-item"> <input type="checkbox" /> <span>Contour Overlay</span> </label>
+                  <label className="toggle-item"> <input type="checkbox" /> <span>Stage Labels</span> </label>
+                </div>
+                {colorMode === 'Travel Distance (Total)' && (<div className="legend-container"> <div className="legend-bar" /> <div className="legend-labels"> <span>0.0</span> <span>23.6 m</span> </div> </div>)}
+                {trailColorMode === 'Travel Distance' && showTrails && (<div className="legend-container" style={{ marginTop: '10px' }}> <div className="legend-bar" /> <div className="legend-labels"> <span>Short Trail</span> <span>Long Trail</span> </div> </div>)}
+              </div>
+            )}
 
-                {rightTab === 'Stats' && (
-                    <div className="panel-section">
-                        <h3><BarChart3 size={16} color="var(--accent)" /> Exit Stats</h3>
-                        <table className="stats-table">
-                            <thead>
-                                <tr>
-                                    <th>EXIT ▲</th>
-                                    <th>COUNT</th>
-                                    <th>FLOW (S⁻¹)</th>
-                                </tr>
-                            </thead>
-                            <tbody>
-                                {elements.filter(el => el.type === 'exit').map((el, i) => (
-                                    <tr key={i}>
-                                        <td>Exit {i}</td>
-                                        <td>0/{agents.length || 10}</td>
-                                        <td>0.00</td>
-                                    </tr>
-                                ))}
-                            </tbody>
-                        </table>
+            {rightTab === 'Environment' && (
+              <div className="panel-section">
+                <h3><Cloud size={16} color="var(--accent)" /> Weather Panel</h3>
+                <div className="panel-field">
+                  <label>Ambient Temp (°C)</label>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                    <input
+                      type="range"
+                      min="-10"
+                      max="50"
+                      value={ambientTemp}
+                      onChange={(e) => setAmbientTemp(parseFloat(e.target.value))}
+                      style={{ flex: 1 }}
+                    />
+                    <span style={{ minWidth: '40px', textAlign: 'right' }}>{ambientTemp}°</span>
+                  </div>
+                </div>
+                <div className="panel-toggle-group">
+                  <label className="toggle-item">
+                    <input type="checkbox" checked={showHeatmap} onChange={(e) => setShowHeatmap(e.target.checked)} />
+                    <span>Show Heat Map</span>
+                  </label>
+                  <label className="toggle-item">
+                    <input type="checkbox" checked={showSmoke} onChange={(e) => setShowSmoke(e.target.checked)} />
+                    <span>Show Smoke</span>
+                  </label>
+                </div>
+                {showHeatmap && (
+                  <div className="legend-container">
+                    <div className="legend-bar" style={{ background: 'linear-gradient(to right, blue, green, yellow, red)' }} />
+                    <div className="legend-labels">
+                      <span>{ambientTemp}°C</span>
+                      <span>{ambientTemp + 20}°C</span>
                     </div>
+                  </div>
                 )}
-            </div>
+                {showSmoke && (
+                  <div className="legend-container" style={{ marginTop: '8px' }}>
+                    <div className="legend-bar" style={{ background: 'linear-gradient(to right, rgba(40,38,36,0), rgba(40,38,36,0.5), rgba(40,38,36,1))' }} />
+                    <div className="legend-labels">
+                      <span>No Smoke</span>
+                      <span>Dense Smoke</span>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {rightTab === 'Stats' && (
+              <div className="panel-section">
+                <h3><BarChart3 size={16} color="var(--accent)" /> Exit Stats</h3>
+                <table className="stats-table">
+                  <thead>
+                    <tr>
+                      <th>EXIT ▲</th>
+                      <th>COUNT</th>
+                      <th>FLOW (S⁻¹)</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {elements.filter(el => el.type === 'exit').map((el, i) => (
+                      <tr key={i}>
+                        <td>Exit {i}</td>
+                        <td>0/{agents.length || 10}</td>
+                        <td>0.00</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
         </div>
-        {showModal && ( <div className="modal-overlay"><div className="modal-content"><button className="modal-close" onClick={() => setShowModal(false)}><X size={20} /></button><h2 className="modal-title">JuPedSim Web</h2><p className="modal-description">Import a scenario or draw from scratch.</p><div className="modal-options"><div className="option-card" onClick={() => fileInputRef.current.click()}>Upload File</div><div className="option-card" onClick={() => setShowModal(false)}>Start Fresh</div></div></div></div> )}
+        {showModal && (<div className="modal-overlay"><div className="modal-content"><button className="modal-close" onClick={() => setShowModal(false)}><X size={20} /></button><h2 className="modal-title">JuPedSim Web</h2><p className="modal-description">Import a scenario or draw from scratch.</p><div className="modal-options"><div className="option-card" onClick={() => fileInputRef.current.click()}>Upload File</div><div className="option-card" onClick={() => setShowModal(false)}>Start Fresh</div></div></div></div>)}
         {isSimulating && calculationProgress < 100 && (
           <div className="calculation-overlay">
             <div className="calculation-card">
@@ -933,8 +940,8 @@ function App() {
           <div className="playback-controls">
             <button onClick={() => setIsPlaying(!isPlaying)} className="play-btn">{isPlaying ? <Pause size={24} /> : <Play size={24} />}</button>
             <div className="scrubber-container">
-               <input type="range" min="0" max={totalFrames - 1} value={currentFrame} onChange={(e) => seekFrame(parseInt(e.target.value))} />
-               <div className="time-labels"> <span>{Math.floor(currentFrame / 20)}s</span> <span>Frame {currentFrame} / {totalFrames}</span> <span>{Math.floor(totalFrames / 20)}s</span> </div>
+              <input type="range" min="0" max={totalFrames - 1} value={currentFrame} onChange={(e) => seekFrame(parseInt(e.target.value))} />
+              <div className="time-labels"> <span>{Math.floor(currentFrame / 20)}s</span> <span>Frame {currentFrame} / {totalFrames}</span> <span>{Math.floor(totalFrames / 20)}s</span> </div>
             </div>
             <button onClick={stopSimulation} className="exit-btn">Exit</button>
           </div>
@@ -945,7 +952,7 @@ function App() {
         <div className="cursor-coords"><Activity size={12} /><span>X: {mousePos.x} m</span><span>Y: {mousePos.y} m</span></div>
         <div className="zoom-indicator"><Maximize2 size={12} /><span>Zoom: {Math.round((transform.scale / 20) * 100)}%</span></div>
         <div className="spacer" />
-        {isSimulating && calculationProgress === 100 && <div className="status-item" style={{ color: '#10b981', fontWeight: 'bold', marginRight: '20px' }}>Recording Ready ({Math.floor(totalFrames/20)}s)</div>}
+        {isSimulating && calculationProgress === 100 && <div className="status-item" style={{ color: '#10b981', fontWeight: 'bold', marginRight: '20px' }}>Recording Ready ({Math.floor(totalFrames / 20)}s)</div>}
         <div className="status-item">Ready</div>
       </footer>
     </div>
