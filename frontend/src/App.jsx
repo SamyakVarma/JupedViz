@@ -145,6 +145,15 @@ function App() {
         if (data.heatmap) {
           setHeatmapData(data.heatmap);
         }
+        if (data.casualty_event) {
+          const msg = `☠ STAMPEDE CASUALTY — ${data.casualty_event.total} agent(s) ${data.casualty_event.cause}`;
+          setCasualtyPopup(msg);
+          setTimeout(() => setCasualtyPopup(null), 3000);
+        }
+        if (data.stampede_alert) {
+          setStampedeBanner(true);
+          setTimeout(() => setStampedeBanner(false), 6000);
+        }
       }
     };
     ws.onclose = () => { setIsSimulating(false); setIsPlaying(false); };
@@ -625,7 +634,20 @@ function App() {
       else if (extension === 'dxf') imported = parseDXF(content) || [];
       else if (extension === 'ifc') imported = parseIFC(content) || [];
       if (imported.length > 0) {
-        const validImported = imported.filter(Boolean); setElements(prev => [...prev, ...validImported]); setShowModal(false);
+        const validImported = imported.filter(Boolean); 
+        setElements(prev => {
+          const startingId = prev.length;
+          const newElements = validImported.map((el, i) => {
+            const newEl = { ...el, id: startingId + i };
+            if (newEl.type === 'start') {
+              newEl.agentCount = newEl.agentCount || 10;
+              newEl.crowdComposition = newEl.crowdComposition || { male: 50, female: 50, child: 0 };
+            }
+            return newEl;
+          });
+          return [...prev, ...newElements];
+        });
+        setShowModal(false);
         if (validImported.length > 0) {
           const allPoints = validImported.flatMap(el => el.points);
           const minX = Math.min(...allPoints.map(p => p.x)); const maxX = Math.max(...allPoints.map(p => p.x));

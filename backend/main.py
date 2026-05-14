@@ -328,6 +328,7 @@ async def simulation_stream(websocket: WebSocket):
                 heatmaps_cache = {} # Map frame_idx -> heatmap
                 fatigue_cache = {} # Map frame_idx -> {agent_id: fatigue}
                 panic_cache = {} # Map frame_idx -> {agent_id: panic}
+                events_cache = {} # Map frame_idx -> event_data
                 print(f"Starting calculation: {total_steps} steps, {initial_agents} agents")
                 
                 emergency_trigger_step = config.emergencyTriggerTime * config.fps if config.emergencyMode else -1
@@ -419,7 +420,7 @@ async def simulation_stream(websocket: WebSocket):
                         
                         elif clearance_triggered and not emergency_triggered:
                             # CLEARANCE MODE ACTIVE: check for escalation or resolution
-                            if avg_panic > 0.8:
+                            if avg_panic > 0.65:
                                 # ESCALATE TO STAMPEDE
                                 clearance_triggered = False
                                 emergency_triggered = True
@@ -481,6 +482,7 @@ async def simulation_stream(websocket: WebSocket):
                     # === MANUAL EMERGENCY TRIGGER ===
                     if config.emergencyMode and step >= emergency_trigger_step and not emergency_triggered:
                         emergency_triggered = True
+                        stampede_alert = {"message": "STAMPEDE DETECTED — Emergency Evacuation Triggered", "step": step}
                         if exit_centroids:
                             for stage_id in exit_centroids:
                                 em_journeys[stage_id] = sim.add_journey(jps.JourneyDescription([stage_id]))
@@ -712,6 +714,13 @@ async def simulation_stream(websocket: WebSocket):
                             heatmap_data["frame_idx"] = frame_idx
                             heatmaps_cache[frame_idx] = heatmap_data
                             
+                            if casualty_event or stampede_alert or clearance_alert or clearance_ended:
+                                if frame_idx not in events_cache: events_cache[frame_idx] = {}
+                                if casualty_event: events_cache[frame_idx]["casualty_event"] = casualty_event
+                                if stampede_alert: events_cache[frame_idx]["stampede_alert"] = stampede_alert
+                                if clearance_alert: events_cache[frame_idx]["clearance_alert"] = clearance_alert
+                                if clearance_ended: events_cache[frame_idx]["clearance_ended"] = True
+                            
                         progress_msg = {
                             "type": "progress", 
                             "percent": int((step / total_steps) * 100), 
@@ -765,12 +774,16 @@ async def simulation_stream(websocket: WebSocket):
                     if hm:
                         hm["frame_idx"] = frame_idx
                     
-                    await websocket.send_json({
+                    frame_msg = {
                         "type": "frame_data", 
                         "frame": frame_idx, 
                         "agents": agents,
                         "heatmap": hm
-                    })
+                    }
+                    if frame_idx in events_cache:
+                        frame_msg.update(events_cache[frame_idx])
+                        
+                    await websocket.send_json(frame_msg)
             elif action == "stop": break
     except Exception as e:
         import traceback
