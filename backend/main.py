@@ -365,9 +365,11 @@ async def simulation_stream(websocket: WebSocket):
                             m = agent_metadata[a.id]
                             
                             # Panic Accumulation (fire + smoke)
-                            fire_dist = min([math.hypot(a.position[0]-fx, a.position[1]-fy) for fx, fy in fire_sources]) if fire_sources else 20.0
-                            smoke_dist = min([math.hypot(a.position[0]-sx, a.position[1]-sy) for sx, sy in smoke_sources]) if smoke_sources else 20.0
-                            panic_rate = (0.05 / max(fire_dist, 1.0) if fire_sources else 0.0) + (0.02 / max(smoke_dist, 1.0) if smoke_sources else 0.0)
+                            # Panic Accumulation with 10m cutoff
+                            fire_dist = min([math.hypot(a.position[0]-fx, a.position[1]-fy) for fx, fy in fire_sources]) if fire_sources else 10.0
+                            smoke_dist = min([math.hypot(a.position[0]-sx, a.position[1]-sy) for sx, sy in smoke_sources]) if smoke_sources else 10.0
+                            panic_rate = ((0.015 / max(min(fire_dist, 10.0), 1.0)) if fire_sources and fire_dist < 10.0 else 0.0) + \
+                                        ((0.02 / max(min(smoke_dist, 10.0), 1.0)) if smoke_sources and smoke_dist < 10.0 else 0.0)
                             neuroticism = m.get("neuroticism", 0.5)
                             
                             # Crowd density amplifier
@@ -673,7 +675,30 @@ async def simulation_stream(websocket: WebSocket):
                     if step > 0 and sim.agent_count() == 0:
                         print(f"Early exit: Step {step}")
                         break
-                    sim.iterate()
+                    try:
+                        sim.iterate()
+                    except RuntimeError as e:
+                        err_msg = str(e)
+                        if "outside of accessible area" in err_msg:
+                            import re
+                            match = re.search(r"Point \(([^,]+), ([^)]+)\)", err_msg)
+                            if match:
+                                px, py = float(match.group(1)), float(match.group(2))
+                                closest_agent = None
+                                min_dist = float('inf')
+                                for a in sim.agents():
+                                    dist = math.hypot(a.position[0]-px, a.position[1]-py)
+                                    if dist < min_dist:
+                                        min_dist = dist
+                                        closest_agent = a
+                                if closest_agent and min_dist < 2.0:
+                                    sim.mark_agent_for_removal(closest_agent.id)
+                                    casualties += 1
+                                    casualty_log.append({"step": step, "agent_id": closest_agent.id, "cause": "crushed against wall"})
+                                    print(f"  ☠ Agent {closest_agent.id} CRUSHED at step {step} (casualties: {casualties})")
+                                    casualty_event = {"cause": "crushed against wall", "total": casualties}
+                        else:
+                            raise e
                     
                     # Track agents that exited normally (not casualties)
                     for rid in sim.removed_agents():
