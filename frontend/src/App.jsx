@@ -5,7 +5,7 @@ import {
   MousePointer2, Move, RotateCcw, Trash2, Copy, Undo, Redo,
   Square, LogOut, Play, Pause, Shield, MapPin, Clock,
   X, HelpCircle, MessageSquare, User, ChevronRight, Activity,
-  Maximize2, ChevronLeft
+  Maximize2, ChevronLeft, Users, Cloud, BarChart3, Eye, Sliders, Zap
 } from 'lucide-react';
 import { parseWKT, parseJSONWKT, parseDXF, parseIFC } from './utils/parsers';
 
@@ -31,10 +31,16 @@ function App() {
   const [ambientTemp, setAmbientTemp] = useState(20.0);
   const [heatmapData, setHeatmapData] = useState(null);
   const [showHeatmap, setShowHeatmap] = useState(true);
+  const [showConfigPanel, setShowConfigPanel] = useState(true);
+  const [oceanComposition, setOceanComposition] = useState({ openness: 20, conscientiousness: 20, extraversion: 20, agreeableness: 20, neuroticism: 20 });
+  
+  const [leftTab, setLeftTab] = useState('Crowd');
+  const [rightTab, setRightTab] = useState('Visuals');
   
   // Viz Options
   const [showTrails, setShowTrails] = useState(true);
-  const [colorMode, setColorMode] = useState('Travel Distance (Total)');
+  const [colorMode, setColorMode] = useState('Uniform Color');
+  const [trailColorMode, setTrailColorMode] = useState('Travel Distance');
   const [agentTrails, setAgentTrails] = useState(new Map()); // id -> points[]
   
   const wsRef = useRef(null);
@@ -76,7 +82,9 @@ function App() {
           elements: elements, 
           fps: 20, 
           duration: simDuration,
-          ambientTemperature: ambientTemp
+          ambientTemperature: ambientTemp,
+          crowdComposition: { male: 50, female: 50, child: 0 },
+          oceanComposition: oceanComposition
         }
       }));
       setIsSimulating(true);
@@ -89,7 +97,6 @@ function App() {
       if (data.type === 'progress') {
         setCalculationProgress(data.percent);
         updateTrails(data.agents);
-        setAgents(data.agents);
         setAgents(data.agents);
         if (data.heatmap) {
           setHeatmapData(data.heatmap);
@@ -243,13 +250,10 @@ function App() {
         // Draw the heatmap canvas scaled to world coordinates
         ctx.save();
         ctx.globalAlpha = 0.6;
-        const worldWidth = width * resolution;
-        const worldHeight = height * resolution;
-        
+        const sw = width * resolution * step;
+        const sh = height * resolution * step;
         const sx = centerX + bounds.xmin * step;
-        const sy = centerY - bounds.ymax * step; // ymax is top in world
-        const sw = worldWidth * step;
-        const sh = worldHeight * step;
+        const sy = (centerY - bounds.ymin * step) - sh;
         
         ctx.drawImage(window.heatmapCanvas, sx, sy, sw, sh);
         ctx.restore();
@@ -290,22 +294,29 @@ function App() {
       if (showTrails) {
         agentTrails.forEach((pts, id) => {
           if (pts.length < 2) return;
-          ctx.beginPath(); ctx.setLineDash([]); ctx.lineWidth = 2; ctx.lineJoin = 'round'; ctx.lineCap = 'round'; ctx.globalAlpha = 0.8;
+          ctx.beginPath(); ctx.setLineDash([]); ctx.lineWidth = 1.5; ctx.lineJoin = 'round'; ctx.lineCap = 'round'; ctx.globalAlpha = 0.5;
+          
           pts.forEach((p, i) => {
             const sx = centerX + p.x * step; const sy = centerY - p.y * step;
-            if (colorMode === 'Travel Distance (Total)') {
-                // Hue based on total distance (0 to 50 meters range)
-                const hue = Math.min(240, (p.totalDist / 50) * 240);
-                ctx.strokeStyle = `hsla(${240 - hue}, 80%, 50%, 0.8)`;
-            } else if (colorMode === 'Distance Remaining') {
-                // Hue based on distance to target (0 to 30 meters range)
-                const distToTarget = p.target ? Math.hypot(p.x - p.target.x, p.y - p.target.y) : 0;
-                const hue = Math.min(240, (distToTarget / 30) * 240);
-                ctx.strokeStyle = `hsla(${hue}, 80%, 50%, 0.8)`;
-            } else {
-                ctx.strokeStyle = 'rgba(59, 130, 246, 0.8)';
+            
+            if (i === 0) ctx.moveTo(sx, sy);
+            else {
+                if (trailColorMode === 'Travel Distance') {
+                    const hue = Math.min(240, (p.totalDist / 50) * 240);
+                    ctx.strokeStyle = `hsla(${240 - hue}, 80%, 50%, 0.5)`;
+                } else if (trailColorMode === 'Distance Remaining') {
+                    const distToTarget = p.target ? Math.hypot(p.x - p.target.x, p.y - p.target.y) : 0;
+                    const hue = Math.min(240, (distToTarget / 30) * 240);
+                    ctx.strokeStyle = `hsla(${hue}, 80%, 50%, 0.5)`;
+                } else if (trailColorMode === 'Subtle Gray') {
+                    ctx.strokeStyle = 'rgba(255, 255, 255, 0.15)';
+                } else {
+                    // Same as Agent - we'd need the agent's current color, but for performance 
+                    // and clarity, we'll use a default blue if 'Same as Agent' isn't easily accessible
+                    ctx.strokeStyle = 'rgba(59, 130, 246, 0.4)';
+                }
+                ctx.lineTo(sx, sy);
             }
-            if (i === 0) ctx.moveTo(sx, sy); else ctx.lineTo(sx, sy);
           });
           ctx.stroke(); ctx.globalAlpha = 1.0;
         });
@@ -314,10 +325,79 @@ function App() {
       // 3. Agents
       agents.forEach(agent => {
         const sx = centerX + agent.x * step; const sy = centerY - agent.y * step;
-        const radius = 0.2 * step; const fatigue = agent.fatigue || 0;
-        const r = Math.min(255, Math.floor(fatigue * 255)); const g = Math.min(255, Math.floor((1 - fatigue) * 255));
-        ctx.beginPath(); ctx.arc(sx, sy, radius, 0, Math.PI * 2); ctx.fillStyle = `rgb(${r}, ${g}, 0)`; ctx.fill();
+        const radius = (agent.type === 'child' ? 0.15 : 0.2) * step; 
+        const fatigue = agent.fatigue || 0;
+        
+        let color = '#3b82f6'; // Male
+        if (agent.type === 'female') color = '#ec4899';
+        else if (agent.type === 'child') color = '#eab308';
+        
+        if (colorMode === 'Color by Start') {
+            const hue = (agent.start_id * 137.5) % 360;
+            color = `hsl(${hue}, 70%, 60%)`;
+        } else if (colorMode === 'Color by Exit') {
+            const hue = (agent.stage_id * 137.5) % 360;
+            color = `hsl(${hue}, 70%, 60%)`;
+        } else if (colorMode === 'Dominant OCEAN Trait') {
+            const traitColors = {
+                'openness': '#3b82f6',
+                'conscientiousness': '#10b981',
+                'extraversion': '#f59e0b',
+                'agreeableness': '#06b6d4',
+                'neuroticism': '#ef4444'
+            };
+            color = traitColors[agent.dominant_trait] || color;
+        } else if (colorMode === 'Stress Level') {
+            const stress = agent.stress || 0;
+            const r = Math.min(255, Math.floor(stress * 255 * 2));
+            const g = Math.min(255, Math.floor((1 - stress) * 255));
+            color = `rgb(${r}, ${g}, 50)`;
+        } else if (colorMode === 'Panic Level') {
+            const panic = agent.panic || 0;
+            const r = Math.min(255, Math.floor(panic * 255 * 2));
+            const g = Math.min(255, Math.floor((1 - panic) * 255));
+            color = `rgb(${r}, ${g}, 50)`;
+        } else if (colorMode === 'Heartbeat') {
+            const hb = agent.heartbeat || 70;
+            const normalized = Math.min(1, Math.max(0, (hb - 60) / 40)); // 60-100 range
+            const r = Math.min(255, Math.floor(normalized * 255));
+            const b = Math.min(255, Math.floor((1 - normalized) * 255));
+            color = `rgb(${r}, 50, ${b})`;
+        } else if (fatigue > 0.1) {
+            const r = Math.min(255, Math.floor(fatigue * 255));
+            const g = Math.min(255, Math.floor((1 - fatigue) * 255));
+            color = `rgb(${r}, ${g}, 50)`;
+        }
+
+        ctx.beginPath();
+        if (agent.type === 'female') {
+            // Triangle
+            ctx.moveTo(sx, sy - radius);
+            ctx.lineTo(sx - radius * 0.9, sy + radius * 0.7);
+            ctx.lineTo(sx + radius * 0.9, sy + radius * 0.7);
+            ctx.closePath();
+        } else if (agent.type === 'child') {
+            // Square
+            ctx.rect(sx - radius, sy - radius, radius * 2, radius * 2);
+        } else {
+            // Circle (Male)
+            ctx.arc(sx, sy, radius, 0, Math.PI * 2);
+        }
+
+        ctx.fillStyle = color; ctx.fill();
         ctx.strokeStyle = 'white'; ctx.lineWidth = 1; ctx.stroke();
+        
+        // Label for clarity at low fatigue
+        if (fatigue < 0.3) {
+            ctx.fillStyle = 'white';
+            ctx.font = `${radius * 0.7}px Inter`;
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            const char = agent.type ? agent.type[0].toUpperCase() : 'M';
+            // Adjust label Y for triangle
+            const labelY = agent.type === 'female' ? sy + radius * 0.2 : sy;
+            ctx.fillText(char, sx, labelY);
+        }
       });
 
       // 4. Rulers
@@ -339,15 +419,42 @@ function App() {
   }, [transform, elements, drawingPoints, mousePos, activeTool, selectedId, agents, showTrails, colorMode, agentTrails]);
 
   const deleteSelected = () => { if (selectedId === null) return; saveToHistory(elements); setElements(prev => prev.filter((_, i) => i !== selectedId)); setSelectedId(null); };
-  const finalizeDrawing = () => { if (drawingPoints.length > 2) { saveToHistory(elements); const type = activeTool.toLowerCase(); setElements(prev => [...prev, { type, points: drawingPoints, count: 0 }]); } setDrawingPoints([]); };
+  const finalizeDrawing = () => { 
+    if (drawingPoints.length > 2) { 
+        saveToHistory(elements); 
+        const type = activeTool.toLowerCase(); 
+        const newEl = { 
+            id: elements.length,
+            type, 
+            points: drawingPoints, 
+            agentCount: type === 'start' ? 10 : 0 
+        };
+        if (type === 'start') {
+            newEl.crowdComposition = { male: 50, female: 50, child: 0 };
+        }
+        setElements(prev => [...prev, newEl]); 
+    } 
+    setDrawingPoints([]); 
+  };
 
   const handleWheel = (e) => { const zoomIntensity = 0.1; const delta = e.deltaY > 0 ? 1 - zoomIntensity : 1 + zoomIntensity; setTransform(prev => ({ ...prev, scale: Math.min(Math.max(prev.scale * delta, 2), 200) })); };
   const handleMouseDown = (e) => {
     const pos = screenToSim(e.clientX, e.clientY, e.ctrlKey);
     if (e.button === 1) { setIsPanning(true); setStartPan({ x: e.clientX - transform.x, y: e.clientY - transform.y }); return; }
     if (e.button === 0) {
-      if (activeTool === 'Select') { let foundIndex = null; for (let i = elements.length - 1; i >= 0; i--) { if (isPointInPoly(pos, elements[i].points)) { foundIndex = i; break; } } setSelectedId(foundIndex); }
-      else if (activeTool === 'Move') { if (selectedId !== null && isPointInPoly(pos, elements[selectedId].points)) setDragStart({ x: pos.x, y: pos.y }); else { setIsPanning(true); setStartPan({ x: e.clientX - transform.x, y: e.clientY - transform.y }); } }
+      if (activeTool === 'Select') { 
+        let foundIndex = null; 
+        for (let i = elements.length - 1; i >= 0; i--) { if (isPointInPoly(pos, elements[i].points)) { foundIndex = i; break; } } 
+        setSelectedId(foundIndex); 
+        if (foundIndex !== null) setLeftTab('Selection');
+      }
+      else if (activeTool === 'Move') { 
+        if (selectedId !== null && isPointInPoly(pos, elements[selectedId].points)) setDragStart({ x: pos.x, y: pos.y }); 
+        else { 
+            setIsPanning(true); 
+            setStartPan({ x: e.clientX - transform.x, y: e.clientY - transform.y }); 
+        } 
+      }
       else if (activeTool === 'Journey') {
         let foundIndex = null; for (let i = elements.length - 1; i >= 0; i--) { if (isPointInPoly(pos, elements[i].points)) { foundIndex = i; break; } }
         if (foundIndex !== null) {
@@ -428,62 +535,234 @@ function App() {
         <div className="user-profile"><span style={{ fontSize: '11px' }}>LU</span><div className="avatar"><User size={12} color="white" /></div></div>
       </header>
       <main className="viewport-container">
-        <canvas ref={canvasRef} onWheel={handleWheel} onMouseDown={handleMouseDown} onMouseMove={handleMouseMove} onMouseUp={handleMouseUp} onMouseLeave={handleMouseUp} onContextMenu={handleContextMenu} style={{ cursor: activeTool === 'Move' ? 'grab' : 'crosshair' }} />
-        <div className={`viz-sidebar ${showRightPanel ? 'open' : 'closed'}`}>
-            <button className="panel-toggle" onClick={() => setShowRightPanel(!showRightPanel)}> {showRightPanel ? <ChevronRight size={16} /> : <ChevronLeft size={16} />} </button>
-            <div className="panel-section">
-                <h3>Agent Coloring</h3>
-                <div className="panel-field">
-                    <label>Color Mode</label>
-                    <select value={colorMode} onChange={(e) => setColorMode(e.target.value)}>
-                        <option>Uniform Color</option> <option>Color by Start</option> <option>Color by Exit</option> <option>Travel Distance (Total)</option> <option>Distance Remaining</option>
-                    </select>
-                </div>
-                <div className="panel-toggle-group">
-                    <label className="toggle-item"> <input type="checkbox" checked={showTrails} onChange={(e) => setShowTrails(e.target.checked)} /> <span>Agent Trails</span> </label>
-                    <label className="toggle-item"> <input type="checkbox" /> <span>Contour Overlay</span> </label>
-                    <label className="toggle-item"> <input type="checkbox" /> <span>Stage Labels</span> </label>
-                </div>
-                {colorMode === 'Travel Distance (Total)' && ( <div className="legend-container"> <div className="legend-bar" /> <div className="legend-labels"> <span>0.0</span> <span>23.6 m</span> </div> </div> )}
-            </div>
+        <div className={`config-sidebar ${showConfigPanel ? 'open' : 'closed'}`}>
+            <button className="panel-toggle" onClick={() => setShowConfigPanel(!showConfigPanel)}> {showConfigPanel ? <ChevronLeft size={16} /> : <ChevronRight size={16} />} </button>
             
-            <div className="panel-section">
-                <h3>Weather Panel</h3>
-                <div className="panel-field">
-                    <label>Ambient Temp (°C)</label>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                        <input 
-                            type="range" 
-                            min="-10" 
-                            max="50" 
-                            value={ambientTemp} 
-                            onChange={(e) => setAmbientTemp(parseFloat(e.target.value))} 
-                            style={{ flex: 1 }}
-                        />
-                        <span style={{ minWidth: '40px', textAlign: 'right' }}>{ambientTemp}°</span>
-                    </div>
-                </div>
-                <div className="panel-toggle-group">
-                    <label className="toggle-item"> 
-                        <input type="checkbox" checked={showHeatmap} onChange={(e) => setShowHeatmap(e.target.checked)} /> 
-                        <span>Show Heat Map</span> 
-                    </label>
-                </div>
-                {showHeatmap && (
-                    <div className="legend-container">
-                        <div className="legend-bar" style={{ background: 'linear-gradient(to right, blue, green, yellow, red)' }} />
-                        <div className="legend-labels">
-                            <span>{ambientTemp}°C</span>
-                            <span>{ambientTemp + 20}°C</span>
+            <div className="sidebar-tabs">
+                <button className={`tab-btn ${leftTab === 'Crowd' ? 'active' : ''}`} onClick={() => setLeftTab('Crowd')}>
+                    <Users size={14} /> Crowd
+                </button>
+                <button className={`tab-btn ${leftTab === 'Selection' ? 'active' : ''}`} onClick={() => setLeftTab('Selection')}>
+                    <Sliders size={14} /> Selection
+                </button>
+            </div>
+
+            <div className="sidebar-content">
+                {leftTab === 'Crowd' && (
+                    <>
+                        <div className="panel-section">
+                            <h3><MapPin size={16} color="var(--accent)" /> Start Areas</h3>
+                            <div className="start-areas-list" style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                                {elements.filter(el => el.type === 'start').map((el, i) => (
+                                    <button key={el.id} className={`toolbar-btn ${selectedId === el.id ? 'active' : ''}`} 
+                                        style={{ justifyContent: 'space-between', width: '100%', padding: '10px' }}
+                                        onClick={() => { setSelectedId(el.id); setLeftTab('Selection'); }}
+                                    >
+                                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                            <Shield size={12} />
+                                            <span>Start Area {el.id}</span>
+                                        </div>
+                                        <div style={{ fontSize: '10px', color: 'var(--text-muted)' }}>
+                                            {el.agentCount || 10} agents
+                                        </div>
+                                    </button>
+                                ))}
+                                {elements.filter(el => el.type === 'start').length === 0 && (
+                                    <div style={{ fontSize: '11px', color: 'var(--text-muted)', textAlign: 'center', padding: '10px', background: 'rgba(255,255,255,0.02)', borderRadius: '6px' }}>
+                                        No start areas defined
+                                    </div>
+                                )}
+                            </div>
                         </div>
+
+                        <div className="panel-section">
+                            <h3><Activity size={16} color="var(--accent)" /> OCEAN Traits</h3>
+                            {Object.keys(oceanComposition).map(trait => (
+                                <div className="panel-field" key={trait}>
+                                    <label style={{ textTransform: 'capitalize' }}>{trait} (%)</label>
+                                    <input type="range" min="0" max="100" value={oceanComposition[trait]} onChange={(e) => {
+                                        setOceanComposition(prev => ({ ...prev, [trait]: parseInt(e.target.value) }));
+                                    }} />
+                                    <div style={{ fontSize: '10px', textAlign: 'right' }}>{oceanComposition[trait]}%</div>
+                                </div>
+                            ))}
+                        </div>
+                    </>
+                )}
+
+                {leftTab === 'Selection' && (
+                    <div className="panel-section">
+                        {selectedId !== null ? (
+                            <>
+                                {elements.find(el => el.id === selectedId)?.type === 'start' ? (
+                                    <>
+                                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '15px', color: '#3b82f6' }}>
+                                            <Shield size={16} />
+                                            <h3 style={{ margin: 0 }}>Start Area {selectedId}</h3>
+                                        </div>
+                                        <div className="panel-field">
+                                            <label>Agent Count</label>
+                                            <input type="number" value={elements.find(el => el.id === selectedId).agentCount || 10} onChange={(e) => {
+                                                const val = parseInt(e.target.value) || 0;
+                                                setElements(prev => prev.map(el => el.id === selectedId ? { ...el, agentCount: val } : el));
+                                            }} />
+                                        </div>
+                                        
+                                        <h4 style={{ fontSize: '12px', color: 'var(--text-main)', marginTop: '20px', marginBottom: '12px', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                            <Users size={14} color="var(--accent)" /> Crowd Composition
+                                        </h4>
+                                        {['male', 'female', 'child'].map(type => (
+                                            <div className="panel-field" key={type}>
+                                                <label style={{ textTransform: 'capitalize' }}>{type} (%)</label>
+                                                <input type="range" min="0" max="100" 
+                                                    value={elements.find(el => el.id === selectedId).crowdComposition?.[type] || 0} 
+                                                    onChange={(e) => {
+                                                        const val = parseInt(e.target.value);
+                                                        const el = elements.find(el => el.id === selectedId);
+                                                        const currentComp = el.crowdComposition || { male: 50, female: 50, child: 0 };
+                                                        const newComp = { ...currentComp, [type]: val };
+                                                        setElements(prev => prev.map(e => e.id === selectedId ? { ...e, crowdComposition: newComp } : e));
+                                                    }} 
+                                                />
+                                                <div style={{ fontSize: '10px', textAlign: 'right' }}>
+                                                    {elements.find(el => el.id === selectedId).crowdComposition?.[type] || 0}%
+                                                </div>
+                                            </div>
+                                        ))}
+                                        <div style={{ fontSize: '10px', color: '#888', marginBottom: '10px' }}>
+                                            Configure demographics for this specific entry point.
+                                        </div>
+                                    </>
+                                ) : (
+                                    <div style={{ textAlign: 'center', padding: '40px 20px', color: 'var(--text-muted)' }}>
+                                        <Box size={32} style={{ marginBottom: '16px', opacity: 0.5 }} />
+                                        <p>Element {selectedId} selected. No specific properties available.</p>
+                                    </div>
+                                )}
+                            </>
+                        ) : (
+                            <div style={{ textAlign: 'center', padding: '40px 20px', color: 'var(--text-muted)' }}>
+                                <MousePointer2 size={32} style={{ marginBottom: '16px', opacity: 0.5 }} />
+                                <p>Select an element on the canvas to view its properties.</p>
+                            </div>
+                        )}
                     </div>
                 )}
             </div>
-            <div className="panel-section">
-                <h3>Exit Stats</h3>
-                <table className="stats-table"> <thead> <tr> <th>EXIT ▲</th> <th>COUNT</th> <th>FLOW (S⁻¹)</th> </tr> </thead>
-                    <tbody> {elements.filter(el => el.type === 'exit').map((el, i) => ( <tr key={i}> <td>Exit {i}</td> <td>0/{agents.length || 10}</td> <td>0.00</td> </tr> ))} </tbody>
-                </table>
+        </div>
+        <canvas ref={canvasRef} onWheel={handleWheel} onMouseDown={handleMouseDown} onMouseMove={handleMouseMove} onMouseUp={handleMouseUp} onMouseLeave={handleMouseUp} onContextMenu={handleContextMenu} style={{ cursor: activeTool === 'Move' ? 'grab' : 'crosshair' }} />
+        <div className={`viz-sidebar ${showRightPanel ? 'open' : 'closed'}`}>
+            <button className="panel-toggle" onClick={() => setShowRightPanel(!showRightPanel)}> {showRightPanel ? <ChevronRight size={16} /> : <ChevronLeft size={16} />} </button>
+            
+            <div className="sidebar-tabs">
+                <button className={`tab-btn ${rightTab === 'Visuals' ? 'active' : ''}`} onClick={() => setRightTab('Visuals')}>
+                    <Eye size={14} /> Visuals
+                </button>
+                <button className={`tab-btn ${rightTab === 'Environment' ? 'active' : ''}`} onClick={() => setRightTab('Environment')}>
+                    <Cloud size={14} /> Env
+                </button>
+                <button className={`tab-btn ${rightTab === 'Stats' ? 'active' : ''}`} onClick={() => setRightTab('Stats')}>
+                    <BarChart3 size={14} /> Stats
+                </button>
+            </div>
+
+            <div className="sidebar-content">
+                {rightTab === 'Visuals' && (
+                    <div className="panel-section">
+                        <h3><Zap size={16} color="var(--accent)" /> Agent Coloring</h3>
+                        <div className="panel-field">
+                            <label>Color Mode</label>
+                            <select value={colorMode} onChange={(e) => setColorMode(e.target.value)}>
+                                <option>Uniform Color</option> 
+                                <option>Color by Start</option> 
+                                <option>Color by Exit</option> 
+                                <option>Dominant OCEAN Trait</option>
+                                <option>Stress Level</option>
+                                <option>Panic Level</option>
+                                <option>Heartbeat</option>
+                                <option>Travel Distance (Total)</option> 
+                                <option>Distance Remaining</option>
+                            </select>
+                        </div>
+                        <div className="panel-toggle-group">
+                            <label className="toggle-item"> <input type="checkbox" checked={showTrails} onChange={(e) => setShowTrails(e.target.checked)} /> <span>Agent Trails</span> </label>
+                            {showTrails && (
+                                <div className="panel-field" style={{ marginLeft: '24px', marginTop: '8px' }}>
+                                    <label>Trail Color Mode</label>
+                                    <select value={trailColorMode} onChange={(e) => setTrailColorMode(e.target.value)} style={{ fontSize: '11px', padding: '4px' }}>
+                                        <option>Travel Distance</option>
+                                        <option>Distance Remaining</option>
+                                        <option>Subtle Gray</option>
+                                        <option>Standard Blue</option>
+                                    </select>
+                                </div>
+                            )}
+                            <label className="toggle-item"> <input type="checkbox" /> <span>Contour Overlay</span> </label>
+                            <label className="toggle-item"> <input type="checkbox" /> <span>Stage Labels</span> </label>
+                        </div>
+                        {colorMode === 'Travel Distance (Total)' && ( <div className="legend-container"> <div className="legend-bar" /> <div className="legend-labels"> <span>0.0</span> <span>23.6 m</span> </div> </div> )}
+                        {trailColorMode === 'Travel Distance' && showTrails && ( <div className="legend-container" style={{ marginTop: '10px' }}> <div className="legend-bar" /> <div className="legend-labels"> <span>Short Trail</span> <span>Long Trail</span> </div> </div> )}
+                    </div>
+                )}
+
+                {rightTab === 'Environment' && (
+                    <div className="panel-section">
+                        <h3><Cloud size={16} color="var(--accent)" /> Weather Panel</h3>
+                        <div className="panel-field">
+                            <label>Ambient Temp (°C)</label>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                                <input 
+                                    type="range" 
+                                    min="-10" 
+                                    max="50" 
+                                    value={ambientTemp} 
+                                    onChange={(e) => setAmbientTemp(parseFloat(e.target.value))} 
+                                    style={{ flex: 1 }}
+                                />
+                                <span style={{ minWidth: '40px', textAlign: 'right' }}>{ambientTemp}°</span>
+                            </div>
+                        </div>
+                        <div className="panel-toggle-group">
+                            <label className="toggle-item"> 
+                                <input type="checkbox" checked={showHeatmap} onChange={(e) => setShowHeatmap(e.target.checked)} /> 
+                                <span>Show Heat Map</span> 
+                            </label>
+                        </div>
+                        {showHeatmap && (
+                            <div className="legend-container">
+                                <div className="legend-bar" style={{ background: 'linear-gradient(to right, blue, green, yellow, red)' }} />
+                                <div className="legend-labels">
+                                    <span>{ambientTemp}°C</span>
+                                    <span>{ambientTemp + 20}°C</span>
+                                </div>
+                            </div>
+                        )}
+                    </div>
+                )}
+
+                {rightTab === 'Stats' && (
+                    <div className="panel-section">
+                        <h3><BarChart3 size={16} color="var(--accent)" /> Exit Stats</h3>
+                        <table className="stats-table">
+                            <thead>
+                                <tr>
+                                    <th>EXIT ▲</th>
+                                    <th>COUNT</th>
+                                    <th>FLOW (S⁻¹)</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {elements.filter(el => el.type === 'exit').map((el, i) => (
+                                    <tr key={i}>
+                                        <td>Exit {i}</td>
+                                        <td>0/{agents.length || 10}</td>
+                                        <td>0.00</td>
+                                    </tr>
+                                ))}
+                            </tbody>
+                        </table>
+                    </div>
+                )}
             </div>
         </div>
         {showModal && ( <div className="modal-overlay"><div className="modal-content"><button className="modal-close" onClick={() => setShowModal(false)}><X size={20} /></button><h2 className="modal-title">JuPedSim Web</h2><p className="modal-description">Import a scenario or draw from scratch.</p><div className="modal-options"><div className="option-card" onClick={() => fileInputRef.current.click()}>Upload File</div><div className="option-card" onClick={() => setShowModal(false)}>Start Fresh</div></div></div></div> )}

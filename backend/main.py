@@ -27,12 +27,15 @@ class Element(BaseModel):
     points: List[Point]
     color: Optional[str] = None
     agentCount: Optional[int] = 10
+    crowdComposition: Optional[Dict[str, float]] = None # Local composition
 
 class SimulationConfig(BaseModel):
     elements: List[Element]
     fps: int = 20
     duration: int = 60 
     ambientTemperature: float = 20.0
+    crowdComposition: Dict[str, float] = {"male": 40, "female": 40, "child": 20}
+    oceanComposition: Dict[str, float] = {"openness": 20, "conscientiousness": 20, "extraversion": 20, "agreeableness": 20, "neuroticism": 20}
 
 def build_jps_simulation(config: SimulationConfig, trajectory_path: str):
     # Separate elements by type
@@ -56,7 +59,7 @@ def build_jps_simulation(config: SimulationConfig, trajectory_path: str):
             poly = shapely.Polygon(pts)
             if not poly.is_valid: poly = poly.buffer(0)
             
-            data = {'poly': poly, 'id': i, 'agentCount': el.agentCount}
+            data = {'poly': poly, 'id': i, 'agentCount': el.agentCount, 'comp': el.crowdComposition}
             if el.type == 'boundary': walkable_polys.append(poly)
             elif el.type == 'obstacle': obstacle_polys.append(poly)
             elif el.type == 'exit': exits.append(data)
@@ -112,11 +115,31 @@ def build_jps_simulation(config: SimulationConfig, trajectory_path: str):
             j_id = simulation.add_journey(j_desc)
             start_to_journey[source_start_id] = (j_id, target_exit_stage)
 
-    # Distribute Agents
+    # Global OCEAN probabilities
+    ocean_comp = config.oceanComposition
+    ocean_traits = ['openness', 'conscientiousness', 'extraversion', 'agreeableness', 'neuroticism']
+    ocean_probs = [ocean_comp.get(t, 20)/100 for t in ocean_traits]
+    total_ocean_prob = sum(ocean_probs)
+    if total_ocean_prob > 0:
+        ocean_probs = [p/total_ocean_prob for p in ocean_probs]
+    else:
+        ocean_probs = [0.2] * 5
+
+    # Spawn agents and record types
     total_agents = 0
+    agent_metadata = {}
+    types = ['male', 'female', 'child']
     for s in starts:
         try:
             count = s['agentCount'] or 10
+            
+            # Use local composition if available, else global
+            local_comp = s['comp'] or config.crowdComposition
+            local_probs = [local_comp.get('male', 40)/100, local_comp.get('female', 40)/100, local_comp.get('child', 20)/100]
+            total_local = sum(local_probs)
+            if total_local > 0: local_probs = [p/total_local for p in local_probs]
+            else: local_probs = [0.4, 0.4, 0.2]
+
             positions = jps.distribute_by_number(
                 polygon=s['poly'],
                 number_of_agents=count,
@@ -124,35 +147,65 @@ def build_jps_simulation(config: SimulationConfig, trajectory_path: str):
                 distance_to_polygon=0.2
             )
             
-            # Check if this start has an assigned journey
             journey_info = start_to_journey.get(s['id'])
             
             for pos in positions:
-                params = jps.CollisionFreeSpeedModelV2AgentParameters(position=pos, radius=0.15)
+                # Randomly choose type
+                a_type = np.random.choice(types, p=local_probs)
+                radius = 0.15 if a_type == 'child' else 0.18 # slightly larger for adults
+                
+                # Random OCEAN trait dominance
+                dominant_trait = np.random.choice(ocean_traits, p=ocean_probs)
+                
+                ocean_values = {t: np.random.uniform(0.0, 0.5) for t in ocean_traits}
+                ocean_values[dominant_trait] = np.random.uniform(0.7, 1.0) # Dominant trait is high
+                
+                params = jps.CollisionFreeSpeedModelV2AgentParameters(
+                    position=pos, 
+                    radius=radius, 
+                    type=a_type,
+                    heartbeat=np.random.uniform(60, 80),
+                    stress=np.random.uniform(0.0, 0.2),
+                    panic=0.0,
+                    **ocean_values
+                )
+                
                 if journey_info:
                     params.journey_id = journey_info[0]
                     params.stage_id = journey_info[1]
                 elif exit_to_stage:
-                    # Fallback to first available exit if no journey defined
                     first_exit_id = list(exit_to_stage.values())[0]
                     j_fallback = jps.JourneyDescription([first_exit_id])
                     params.journey_id = simulation.add_journey(j_fallback)
                     params.stage_id = first_exit_id
                 
-                simulation.add_agent(params)
+                agent_id = simulation.add_agent(params)
+                agent_metadata[agent_id] = {
+                    "start_id": s['id'],
+                    "dominant_trait": dominant_trait,
+                    "stress": params.stress,
+                    "panic": params.panic,
+                    "heartbeat": params.heartbeat,
+                    "stage_id": getattr(params, 'stage_id', None),
+                    "openness": ocean_values["openness"],
+                    "conscientiousness": ocean_values["conscientiousness"],
+                    "extraversion": ocean_values["extraversion"],
+                    "agreeableness": ocean_values["agreeableness"],
+                    "neuroticism": ocean_values["neuroticism"]
+                }
                 total_agents += 1
         except Exception as e:
             print(f"Error spawning in start {s['id']}: {e}")
             
-    return simulation, total_agents
+    return simulation, total_agents, agent_metadata
 
 @app.websocket("/ws/simulation")
 async def simulation_stream(websocket: WebSocket):
     await websocket.accept()
     print("WebSocket Accepted")
     recording = None
-    heatmaps_cache = []
     fatigue_cache = {} # frame_idx -> {agent_id: fatigue}
+    agent_info_cache = {"types": {}} # Map agent_id -> type, persistent across actions
     try:
         while True:
             raw_data = await websocket.receive_json()
@@ -164,8 +217,12 @@ async def simulation_stream(websocket: WebSocket):
                     try: os.remove(traj_file)
                     except: pass
                     
-                sim, initial_agents = build_jps_simulation(config, traj_file)
+                sim, initial_agents, agent_metadata = build_jps_simulation(config, traj_file)
                 total_steps = config.duration * config.fps
+                
+                # Cache types and metadata for playback
+                agent_info_cache["types"] = {} 
+                agent_info_cache["metadata"] = agent_metadata
                 
                 # JuPedSim often records at a lower frequency than calculation.
                 # Based on the logs, there's a 4:1 ratio.
@@ -186,12 +243,21 @@ async def simulation_stream(websocket: WebSocket):
                         agent_data = []
                         for a in sim.agents():
                             fatigue_val = getattr(a.model, 'fatigue', 0.0)
+                            a_type = getattr(a, 'type', 'male')
                             agent_data.append({
                                 "id": a.id, "x": a.position[0], "y": a.position[1],
                                 "target_x": a.target[0] if a.target else a.position[0],
                                 "target_y": a.target[1] if a.target else a.position[1],
-                                "fatigue": fatigue_val
+                                "fatigue": fatigue_val,
+                                "type": a_type
                             })
+                            
+                            # Cache type for playback
+                            agent_info_cache["types"][a.id] = a_type
+                            
+                            # Add metadata
+                            m = agent_metadata.get(a.id, {})
+                            agent_data[-1].update(m)
                             
                             if step % sampling_rate == 0:
                                 frame_idx = step // sampling_rate
@@ -226,7 +292,15 @@ async def simulation_stream(websocket: WebSocket):
                     agents = []
                     for a in frame.agents:
                         f_val = fatigue_cache[frame_idx].get(a.id, 0.0) if frame_idx < len(fatigue_cache) else 0.0
-                        agents.append({"id": a.id, "x": a.position[0], "y": a.position[1], "fatigue": f_val})
+                        a_type = agent_info_cache["types"].get(a.id, 'male')
+                        agents.append({
+                            "id": a.id, "x": a.position[0], "y": a.position[1], 
+                            "fatigue": f_val,
+                            "type": a_type
+                        })
+                        # Add metadata for playback
+                        m = agent_info_cache.get("metadata", {}).get(a.id, {})
+                        agents[-1].update(m)
                     
                     hm = heatmaps_cache[frame_idx] if frame_idx < len(heatmaps_cache) else None
                     if hm:
