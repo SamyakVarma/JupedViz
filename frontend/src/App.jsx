@@ -48,6 +48,12 @@ function App() {
   const [trailColorMode, setTrailColorMode] = useState('Travel Distance');
   const [agentTrails, setAgentTrails] = useState(new Map()); // id -> points[]
 
+  // Casualty tracking
+  const [casualties, setCasualties] = useState(0);
+  const [casualtyPopup, setCasualtyPopup] = useState(null);
+  const [stampedeBanner, setStampedeBanner] = useState(false);
+  const [clearanceBanner, setClearanceBanner] = useState(false);
+
   const wsRef = useRef(null);
   const canvasRef = useRef(null);
   const fileInputRef = useRef(null);
@@ -106,6 +112,23 @@ function App() {
         setCalculationProgress(data.percent);
         updateTrails(data.agents);
         setAgents(data.agents);
+        if (data.casualties !== undefined) setCasualties(data.casualties);
+        if (data.casualty_event) {
+          const msg = `☠ STAMPEDE CASUALTY — ${data.casualty_event.total} agent(s) ${data.casualty_event.cause}`;
+          setCasualtyPopup(msg);
+          setTimeout(() => setCasualtyPopup(null), 3000);
+        }
+        if (data.stampede_alert) {
+          setClearanceBanner(false);  // Clearance over, escalated to stampede
+          setStampedeBanner(true);
+          setTimeout(() => setStampedeBanner(false), 6000);
+        }
+        if (data.clearance_alert) {
+          setClearanceBanner(true);
+        }
+        if (data.clearance_ended) {
+          setClearanceBanner(false);
+        }
         if (data.heatmap) {
           setHeatmapData(data.heatmap);
         }
@@ -426,16 +449,15 @@ function App() {
           const g = Math.min(255, Math.floor((1 - stress) * 255));
           color = `rgb(${r}, ${g}, 50)`;
         } else if (colorMode === 'Panic Level') {
-          console.log('Agents panic levels:', agents.map(a => ({ id: a.id, panic: a.panic })));
           const panic = Math.min(1.0, (agent.panic || 0) * 1.5);
           if (panic > 0.8) {
-            color = '#ff0000'; // Bright red for high panic
+            color = '#ff0000';
           } else if (panic > 0.5) {
-            color = '#ff6600'; // Orange for medium panic
+            color = '#ff6600';
           } else if (panic > 0.2) {
-            color = '#ffcc00'; // Yellow for low panic
+            color = '#ffcc00';
           } else {
-            color = '#00ff00'; // Green for calm
+            color = '#00ff00';
           }
         } else if (colorMode === 'Heartbeat') {
           const hb = agent.heartbeat || 70;
@@ -447,6 +469,19 @@ function App() {
           const r = Math.min(255, Math.floor(fatigue * 255));
           const g = Math.min(255, Math.floor((1 - fatigue) * 255));
           color = `rgb(${r}, ${g}, 50)`;
+        }
+
+        // Panic glow ring (only for notably panicked agents)
+        const panicVal = agent.panic || 0;
+        if (panicVal > 0.5) {
+          const glowRadius = radius * (1.5 + panicVal * 0.8);
+          const glowAlpha = Math.min(0.5, (panicVal - 0.5) * 1.0);
+          const glowColor = panicVal > 0.8 ? `rgba(255, 0, 0, ${glowAlpha})` :
+                                             `rgba(255, 120, 0, ${glowAlpha * 0.7})`;
+          ctx.beginPath();
+          ctx.arc(sx, sy, glowRadius, 0, Math.PI * 2);
+          ctx.fillStyle = glowColor;
+          ctx.fill();
         }
 
         ctx.beginPath();
@@ -465,7 +500,18 @@ function App() {
         }
 
         ctx.fillStyle = color; ctx.fill();
-        ctx.strokeStyle = 'white'; ctx.lineWidth = 1; ctx.stroke();
+        const strokeColor = agent.frozen ? '#00ffff' : (panicVal > 0.6 ? '#ff3333' : 'white');
+        const strokeWidth = agent.frozen ? 2.5 : (panicVal > 0.6 ? 2 : 1);
+        ctx.strokeStyle = strokeColor; ctx.lineWidth = strokeWidth; ctx.stroke();
+
+        // Frozen indicator
+        if (agent.frozen) {
+          ctx.fillStyle = '#00ffff';
+          ctx.font = `${radius * 1.2}px Inter`;
+          ctx.textAlign = 'center';
+          ctx.textBaseline = 'middle';
+          ctx.fillText('\u2744', sx, sy - radius * 1.5);
+        }
 
         // Label for clarity at low fatigue
         if (fatigue < 0.3) {
@@ -553,7 +599,6 @@ function App() {
       } else if (activeTool === 'POI') {
         saveToHistory(elements);
         setElements(prev => [...prev, { id: elements.length, type: 'poi', points: [{ x: Number(pos.x), y: Number(pos.y) }] }]);
-        setActiveTool('Select');
       } else if (['Boundary', 'Exit', 'Obstacle', 'Start'].includes(activeTool)) setDrawingPoints(prev => [...prev, pos]);
     }
   };
@@ -900,29 +945,75 @@ function App() {
               </div>
             )}
 
-            {rightTab === 'Stats' && (
-              <div className="panel-section">
-                <h3><BarChart3 size={16} color="var(--accent)" /> Exit Stats</h3>
-                <table className="stats-table">
-                  <thead>
-                    <tr>
-                      <th>EXIT ▲</th>
-                      <th>COUNT</th>
-                      <th>FLOW (S⁻¹)</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {elements.filter(el => el.type === 'exit').map((el, i) => (
-                      <tr key={i}>
-                        <td>Exit {i}</td>
-                        <td>0/{agents.length || 10}</td>
-                        <td>0.00</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            )}
+            {rightTab === 'Stats' && (() => {
+              const n = agents.length;
+              const avgPanic = n ? (agents.reduce((s, a) => s + (a.panic || 0), 0) / n) : 0;
+              const maxPanic = n ? Math.max(...agents.map(a => a.panic || 0)) : 0;
+              const avgHR = n ? (agents.reduce((s, a) => s + (a.heartbeat || 70), 0) / n) : 70;
+              const maxHR = n ? Math.max(...agents.map(a => a.heartbeat || 70)) : 70;
+              const avgStress = n ? (agents.reduce((s, a) => s + (a.stress || 0), 0) / n) : 0;
+              const frozenCount = agents.filter(a => a.frozen).length;
+              const panickingCount = agents.filter(a => (a.panic || 0) > 0.6).length;
+              const calmCount = agents.filter(a => (a.panic || 0) < 0.3).length;
+
+              const StatRow = ({ label, value, color, bar }) => (
+                <div style={{ marginBottom: '12px' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '12px', marginBottom: '4px' }}>
+                    <span style={{ color: 'var(--text-muted)' }}>{label}</span>
+                    <span style={{ color: color || 'var(--text-main)', fontWeight: '600', fontFamily: 'monospace' }}>{value}</span>
+                  </div>
+                  {bar !== undefined && (
+                    <div style={{ height: '4px', background: 'rgba(255,255,255,0.1)', borderRadius: '2px', overflow: 'hidden' }}>
+                      <div style={{ height: '100%', width: `${Math.min(100, bar * 100)}%`, background: color || 'var(--accent)', borderRadius: '2px', transition: 'width 0.3s' }} />
+                    </div>
+                  )}
+                </div>
+              );
+
+              return (
+                <>
+                  <div className="panel-section">
+                    <h3><BarChart3 size={16} color="var(--accent)" /> Crowd Overview</h3>
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', marginBottom: '16px' }}>
+                      <div style={{ background: 'rgba(59,130,246,0.15)', padding: '12px', borderRadius: '8px', textAlign: 'center' }}>
+                        <div style={{ fontSize: '22px', fontWeight: '700', color: '#3b82f6' }}>{n}</div>
+                        <div style={{ fontSize: '10px', color: 'var(--text-muted)' }}>AGENTS</div>
+                      </div>
+                      <div style={{ background: 'rgba(239,68,68,0.15)', padding: '12px', borderRadius: '8px', textAlign: 'center' }}>
+                        <div style={{ fontSize: '22px', fontWeight: '700', color: '#ef4444' }}>{casualties}</div>
+                        <div style={{ fontSize: '10px', color: 'var(--text-muted)' }}>CASUALTIES</div>
+                      </div>
+                      <div style={{ background: 'rgba(0,255,255,0.1)', padding: '12px', borderRadius: '8px', textAlign: 'center' }}>
+                        <div style={{ fontSize: '22px', fontWeight: '700', color: '#00ffff' }}>{frozenCount}</div>
+                        <div style={{ fontSize: '10px', color: 'var(--text-muted)' }}>FROZEN</div>
+                      </div>
+                      <div style={{ background: 'rgba(16,185,129,0.15)', padding: '12px', borderRadius: '8px', textAlign: 'center' }}>
+                        <div style={{ fontSize: '22px', fontWeight: '700', color: '#10b981' }}>{calmCount}</div>
+                        <div style={{ fontSize: '10px', color: 'var(--text-muted)' }}>CALM</div>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="panel-section">
+                    <h3><Activity size={16} color="#ef4444" /> Panic</h3>
+                    <StatRow label="Average" value={avgPanic.toFixed(2)} color={avgPanic > 0.6 ? '#ef4444' : avgPanic > 0.3 ? '#f59e0b' : '#10b981'} bar={avgPanic} />
+                    <StatRow label="Peak" value={maxPanic.toFixed(2)} color={maxPanic > 0.8 ? '#ff0000' : '#f59e0b'} bar={maxPanic} />
+                    <StatRow label="Panicking (>0.6)" value={`${panickingCount}/${n}`} color="#ef4444" bar={n ? panickingCount / n : 0} />
+                  </div>
+
+                  <div className="panel-section">
+                    <h3><Activity size={16} color="#f472b6" /> Heart Rate</h3>
+                    <StatRow label="Average BPM" value={avgHR.toFixed(0)} color={avgHR > 120 ? '#ef4444' : avgHR > 110 ? '#f59e0b' : '#10b981'} bar={(avgHR - 70) / 60} />
+                    <StatRow label="Peak BPM" value={maxHR.toFixed(0)} color={maxHR > 125 ? '#ff0000' : maxHR > 110 ? '#f59e0b' : '#10b981'} bar={(maxHR - 70) / 60} />
+                  </div>
+
+                  <div className="panel-section">
+                    <h3><Activity size={16} color="#a78bfa" /> Stress</h3>
+                    <StatRow label="Average" value={avgStress.toFixed(2)} color={avgStress > 0.6 ? '#ef4444' : avgStress > 0.3 ? '#f59e0b' : '#10b981'} bar={avgStress} />
+                  </div>
+                </>
+              );
+            })()}
           </div>
         </div>
         {showModal && (<div className="modal-overlay"><div className="modal-content"><button className="modal-close" onClick={() => setShowModal(false)}><X size={20} /></button><h2 className="modal-title">JuPedSim Web</h2><p className="modal-description">Import a scenario or draw from scratch.</p><div className="modal-options"><div className="option-card" onClick={() => fileInputRef.current.click()}>Upload File</div><div className="option-card" onClick={() => setShowModal(false)}>Start Fresh</div></div></div></div>)}
@@ -934,6 +1025,29 @@ function App() {
               <div className="progress-bar-container"> <div className="progress-bar-fill" style={{ width: `${calculationProgress}%` }} /> </div>
               <div style={{ color: 'var(--text-muted)', fontSize: '14px' }}>{calculationProgress}% Complete</div>
             </div>
+          </div>
+        )}
+        {stampedeBanner && (
+          <div style={{
+            position: 'absolute', top: 0, left: 0, right: 0, zIndex: 1001,
+            background: 'linear-gradient(90deg, #dc2626, #b91c1c, #dc2626)',
+            color: 'white', padding: '14px 0', textAlign: 'center',
+            fontSize: '18px', fontWeight: '700', letterSpacing: '2px',
+            boxShadow: '0 4px 30px rgba(220, 38, 38, 0.6)',
+            animation: 'pulse 1s ease-in-out infinite'
+          }}>
+            ⚠ STAMPEDE DETECTED — Emergency Evacuation Triggered
+          </div>
+        )}
+        {casualtyPopup && (
+          <div style={{
+            position: 'absolute', top: (stampedeBanner || clearanceBanner) ? '60px' : '80px', left: '50%', transform: 'translateX(-50%)',
+            background: 'rgba(220, 38, 38, 0.95)', color: 'white', padding: '12px 24px',
+            borderRadius: '8px', fontSize: '14px', fontWeight: '600', zIndex: 1000,
+            boxShadow: '0 4px 20px rgba(220, 38, 38, 0.4)', backdropFilter: 'blur(10px)',
+            animation: 'fadeIn 0.3s ease'
+          }}>
+            {casualtyPopup}
           </div>
         )}
         {playbackMode && (
@@ -953,6 +1067,7 @@ function App() {
         <div className="zoom-indicator"><Maximize2 size={12} /><span>Zoom: {Math.round((transform.scale / 20) * 100)}%</span></div>
         <div className="spacer" />
         {isSimulating && calculationProgress === 100 && <div className="status-item" style={{ color: '#10b981', fontWeight: 'bold', marginRight: '20px' }}>Recording Ready ({Math.floor(totalFrames / 20)}s)</div>}
+        {casualties > 0 && <div className="status-item" style={{ color: '#ef4444', fontWeight: 'bold', marginRight: '20px' }}>☠ Casualties: {casualties}</div>}
         <div className="status-item">Ready</div>
       </footer>
     </div>

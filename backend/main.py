@@ -243,7 +243,7 @@ def build_jps_simulation(config: SimulationConfig, trajectory_path: str):
                 
                 # Bind generic attributes required by the backend
                 params.type = a_type
-                params.heartbeat = np.random.uniform(60, 80)
+                params.heartbeat = np.random.uniform(70, 90)
                 params.stress = np.random.uniform(0.0, 0.2)
                 params.panic = 0.0
                 for k, v in ocean_values.items():
@@ -281,6 +281,7 @@ def build_jps_simulation(config: SimulationConfig, trajectory_path: str):
                     "stress": params.stress,
                     "panic": params.panic,
                     "heartbeat": params.heartbeat,
+                    "base_heartbeat": params.heartbeat,
                     "base_speed": params.desired_speed,
                     "stage_id": getattr(params, 'stage_id', None),
                     "openness": ocean_values["openness"],
@@ -331,7 +332,13 @@ async def simulation_stream(websocket: WebSocket):
                 
                 emergency_trigger_step = config.emergencyTriggerTime * config.fps if config.emergencyMode else -1
                 emergency_triggered = False
+                clearance_triggered = False  # Intermediate mode: agents spread out
                 em_journeys = {}
+                
+                # Casualty tracking
+                casualties = 0
+                casualty_log = []  # List of {step, agent_id, cause}
+                exited_agents = set()  # Track agents that left via exits (not casualties)
                 
                 for step in range(total_steps):
                     # Hazard Avoidance: Smoke causes 50% speed reduction
@@ -344,69 +351,332 @@ async def simulation_stream(websocket: WebSocket):
                             else:
                                 a.model.desired_speed = base_speed
 
-                    if config.emergencyMode and step >= emergency_trigger_step:
-                        if not emergency_triggered:
-                            emergency_triggered = True
-                            if exit_centroids:
-                                for stage_id in exit_centroids:
-                                    em_journeys[stage_id] = sim.add_journey(jps.JourneyDescription([stage_id]))
-                                
-                                for a in sim.agents():
-                                    best_stage = None
-                                    min_cost = float('inf')
-                                    for stage_id, (cx, cy) in exit_centroids.items():
-                                        dist_to_exit = math.hypot(a.position[0]-cx, a.position[1]-cy)
-                                        min_f_dist = min([math.hypot(cx-fx, cy-fy) for fx, fy in fire_sources]) if fire_sources else float('inf')
-                                        min_s_dist = min([math.hypot(cx-sx, cy-sy) for sx, sy in smoke_sources]) if smoke_sources else float('inf')
-                                        
-                                        fire_pen = 1000.0 / max(min_f_dist, 1.0) if fire_sources else 0.0
-                                        smoke_pen = 500.0 / max(min_s_dist, 1.0) if smoke_sources else 0.0
-                                        cost = dist_to_exit + fire_pen + smoke_pen
-                                        
-                                        if cost < min_cost:
-                                            min_cost = cost
-                                            best_stage = stage_id
-                                            
-                                    if best_stage:
-                                        agent_metadata[a.id]["safe_exit_stage"] = best_stage
-                                        sim.switch_agent_journey(agent_id=a.id, journey_id=em_journeys[best_stage], stage_id=best_stage)
-                                        
-                        # Continuous Panic Evaluation
-                        import random
+                    # === PANIC ACCUMULATION (runs every frame, all modes) ===
+                    import random
+                    from collections import Counter
+                    
+                    stampede_alert = None  # Will be set if auto-stampede triggers this frame
+                    clearance_alert = None  # Will be set if clearance mode triggers this frame
+                    clearance_ended = False  # True when clearance mode successfully resolves
+                    
+                    if fire_sources or smoke_sources:
                         for a in sim.agents():
                             m = agent_metadata[a.id]
                             
-                            # 1. Panic Accumulation
+                            # Panic Accumulation (fire + smoke)
                             fire_dist = min([math.hypot(a.position[0]-fx, a.position[1]-fy) for fx, fy in fire_sources]) if fire_sources else 20.0
-                            panic_rate = 0.05 / max(fire_dist, 1.0) if fire_sources else 0.0
+                            smoke_dist = min([math.hypot(a.position[0]-sx, a.position[1]-sy) for sx, sy in smoke_sources]) if smoke_sources else 20.0
+                            panic_rate = (0.05 / max(fire_dist, 1.0) if fire_sources else 0.0) + (0.02 / max(smoke_dist, 1.0) if smoke_sources else 0.0)
                             neuroticism = m.get("neuroticism", 0.5)
                             
-                            m["panic"] = min(1.0, m["panic"] + panic_rate * (1.0 + neuroticism))
+                            # Crowd density amplifier
+                            nearby_count = len(sim.agents_in_range(a.position, 2.0)) - 1
+                            density_factor = 1.0 + 0.25 * max(0, nearby_count)
                             
-                            # 2. Panic Action
-                            is_panicking = m.get("is_panicking", False)
-                            if m["panic"] > 0.6 and not is_panicking:
-                                if random.random() < m["panic"] * 0.05:
-                                    m["is_panicking"] = True
-                                    s_id = m.get("start_id")
-                                    if s_id in panic_journeys:
-                                        sim.switch_agent_journey(agent_id=a.id, journey_id=panic_journeys[s_id][0], stage_id=panic_journeys[s_id][1])
-                                        
-                    # Global Panic Decay & Recovery
+                            m["panic"] = min(1.0, m["panic"] + panic_rate * (1.0 + neuroticism) * density_factor)
+                            
+                            # Derive heartbeat and stress from panic
+                            p = m["panic"]
+                            base_hr = m.get("base_heartbeat", 70.0)
+                            m["heartbeat"] = base_hr + 40.0 * p  # 70-90 calm → 110-130 full panic
+                            m["stress"] = min(1.0, p * 1.2 + neuroticism * 0.1)
+                            
+                            # Continuous Social Force Modulators
+                            a.model.desired_speed = m["base_speed"] * (1.0 + 1.5 * p)
+                            a.model.mass = 80.0 + 40.0 * p
+                            a.model.reaction_time = 0.5 - 0.4 * p
+                            a.model.force_distance = 0.08 - 0.06 * p
+                    
+                    # Crowd-density-only panic (works even without fire/smoke)
                     for a in sim.agents():
                         m = agent_metadata[a.id]
-                        m["panic"] = max(0.0, m.get("panic", 0.0) - 0.0005)
+                        nearby_count = len(sim.agents_in_range(a.position, 1.5)) - 1
+                        # Threshold depends on traits: extraverts + agreeable tolerate crowds, neurotic introverts don't
+                        extraversion = m.get("extraversion", 0.5)
+                        agreeableness = m.get("agreeableness", 0.5)
+                        neuroticism = m.get("neuroticism", 0.5)
+                        # Threshold: 2 (neurotic introvert) to 7 (agreeable extravert)
+                        crowd_tolerance = 2 + int(3.0 * extraversion + 2.0 * agreeableness)
+                        if nearby_count >= crowd_tolerance:
+                            excess = nearby_count - crowd_tolerance + 1
+                            density_panic = 0.001 * excess * (1.0 + neuroticism) * (1.0 - 0.3 * extraversion)
+                            m["panic"] = min(1.0, m.get("panic", 0.0) + density_panic)
+                            # Update derived values
+                            p = m["panic"]
+                            base_hr = m.get("base_heartbeat", 70.0)
+                            m["heartbeat"] = base_hr + 90.0 * p
+                            m["stress"] = min(1.0, p * 1.2 + neuroticism * 0.1)
+                    
+                    # === CLEARANCE / STAMPEDE STATE MACHINE (requires 15+ agents) ===
+                    if sim.agent_count() >= 15:
+                        avg_panic = sum(agent_metadata[a.id].get("panic", 0.0) for a in sim.agents()) / sim.agent_count()
+                        
+                        if not clearance_triggered and not emergency_triggered and avg_panic > 0.3:
+                            # ENTER CLEARANCE MODE: agents spread out
+                            clearance_triggered = True
+                            clearance_alert = {"message": "CROWD CLEARANCE — Agents dispersing", "step": step}
+                            print(f"\n  ⚠ CLEARANCE MODE at step {step}! Average panic: {avg_panic:.2f}\n")
+                        
+                        elif clearance_triggered and not emergency_triggered:
+                            # CLEARANCE MODE ACTIVE: check for escalation or resolution
+                            if avg_panic > 0.8:
+                                # ESCALATE TO STAMPEDE
+                                clearance_triggered = False
+                                emergency_triggered = True
+                                stampede_alert = {"message": "STAMPEDE DETECTED — Emergency Evacuation Triggered", "step": step}
+                                print(f"\n  ⚠⚠⚠ AUTO-STAMPEDE at step {step}! Average panic: {avg_panic:.2f} ⚠⚠⚠\n")
+                                if exit_centroids:
+                                    for stage_id in exit_centroids:
+                                        em_journeys[stage_id] = sim.add_journey(jps.JourneyDescription([stage_id]))
+                                    
+                                    for a in sim.agents():
+                                        best_stage = None
+                                        min_cost = float('inf')
+                                        for stage_id, (cx, cy) in exit_centroids.items():
+                                            dist_to_exit = math.hypot(a.position[0]-cx, a.position[1]-cy)
+                                            min_f_dist = min([math.hypot(cx-fx, cy-fy) for fx, fy in fire_sources]) if fire_sources else float('inf')
+                                            min_s_dist = min([math.hypot(cx-sx, cy-sy) for sx, sy in smoke_sources]) if smoke_sources else float('inf')
+                                            
+                                            fire_pen = 1000.0 / max(min_f_dist, 1.0) if fire_sources else 0.0
+                                            smoke_pen = 500.0 / max(min_s_dist, 1.0) if smoke_sources else 0.0
+                                            cost = dist_to_exit + fire_pen + smoke_pen
+                                            
+                                            if cost < min_cost:
+                                                min_cost = cost
+                                                best_stage = stage_id
+                                                
+                                        if best_stage:
+                                            agent_metadata[a.id]["safe_exit_stage"] = best_stage
+                                            sim.switch_agent_journey(agent_id=a.id, journey_id=em_journeys[best_stage], stage_id=best_stage)
+                                        elif poi_stages:
+                                            poi_order = poi_stages.copy()
+                                            j_desc = jps.JourneyDescription(poi_order)
+                                            for idx in range(len(poi_order)):
+                                                next_stage = poi_order[(idx + 1) % len(poi_order)]
+                                                j_desc.set_transition_for_stage(poi_order[idx], jps.Transition.create_fixed_transition(next_stage))
+                                            fallback_j = sim.add_journey(j_desc)
+                                            sim.switch_agent_journey(agent_id=a.id, journey_id=fallback_j, stage_id=poi_order[0])
+                                            agent_metadata[a.id]["no_exit"] = True
+                            
+                            elif avg_panic < 0.15:
+                                # CLEARANCE SUCCESSFUL: panic subsided, return to normal
+                                clearance_triggered = False
+                                clearance_ended = True
+                                print(f"\n  ✓ CLEARANCE RESOLVED at step {step}! Average panic: {avg_panic:.2f}\n")
+                    
+                    # === CLEARANCE MODE BEHAVIOR ===
+                    if clearance_triggered:
+                        for a in sim.agents():
+                            m = agent_metadata[a.id]
+                            p = m.get("panic", 0.0)
+                            # Increase personal space dramatically (3x normal)
+                            a.model.force_distance = 0.25
+                            # Slightly faster movement to spread out
+                            a.model.desired_speed = m["base_speed"] * 1.2
+                            # More responsive to avoid others
+                            a.model.reaction_time = 0.3
+                            # Enhanced panic decay during clearance (5x normal)
+                            m["panic"] = max(0.0, p - 0.003)
+                    
+                    # === MANUAL EMERGENCY TRIGGER ===
+                    if config.emergencyMode and step >= emergency_trigger_step and not emergency_triggered:
+                        emergency_triggered = True
+                        if exit_centroids:
+                            for stage_id in exit_centroids:
+                                em_journeys[stage_id] = sim.add_journey(jps.JourneyDescription([stage_id]))
+                            
+                            for a in sim.agents():
+                                best_stage = None
+                                min_cost = float('inf')
+                                for stage_id, (cx, cy) in exit_centroids.items():
+                                    dist_to_exit = math.hypot(a.position[0]-cx, a.position[1]-cy)
+                                    min_f_dist = min([math.hypot(cx-fx, cy-fy) for fx, fy in fire_sources]) if fire_sources else float('inf')
+                                    min_s_dist = min([math.hypot(cx-sx, cy-sy) for sx, sy in smoke_sources]) if smoke_sources else float('inf')
+                                    
+                                    fire_pen = 1000.0 / max(min_f_dist, 1.0) if fire_sources else 0.0
+                                    smoke_pen = 500.0 / max(min_s_dist, 1.0) if smoke_sources else 0.0
+                                    cost = dist_to_exit + fire_pen + smoke_pen
+                                    
+                                    if cost < min_cost:
+                                        min_cost = cost
+                                        best_stage = stage_id
+                                        
+                                if best_stage:
+                                    agent_metadata[a.id]["safe_exit_stage"] = best_stage
+                                    sim.switch_agent_journey(agent_id=a.id, journey_id=em_journeys[best_stage], stage_id=best_stage)
+                                elif poi_stages:
+                                    poi_order = poi_stages.copy()
+                                    j_desc = jps.JourneyDescription(poi_order)
+                                    for idx in range(len(poi_order)):
+                                        next_stage = poi_order[(idx + 1) % len(poi_order)]
+                                        j_desc.set_transition_for_stage(poi_order[idx], jps.Transition.create_fixed_transition(next_stage))
+                                    fallback_j = sim.add_journey(j_desc)
+                                    sim.switch_agent_journey(agent_id=a.id, journey_id=fallback_j, stage_id=poi_order[0])
+                                    agent_metadata[a.id]["no_exit"] = True
+                    
+                    # === PROGRESSIVE EXIT RE-EVALUATION (only after emergency triggered) ===
+                    if emergency_triggered and em_journeys:
+                        def get_visible_exits(agent, panic_level, all_exits):
+                            fov_half = math.pi - (5.0 * math.pi / 6.0) * panic_level
+                            max_dist = 50.0 - 40.0 * panic_level
+                            
+                            vx, vy = agent.model.velocity
+                            has_heading = (abs(vx) + abs(vy)) > 0.01
+                            facing = math.atan2(vy, vx) if has_heading else None
+                            
+                            visible = {}
+                            for stage_id, (cx, cy) in all_exits.items():
+                                dx, dy = cx - agent.position[0], cy - agent.position[1]
+                                dist = math.hypot(dx, dy)
+                                if dist > max_dist:
+                                    continue
+                                if facing is not None and panic_level > 0.2:
+                                    angle_to_exit = math.atan2(dy, dx)
+                                    delta = abs(angle_to_exit - facing)
+                                    delta = min(delta, 2.0 * math.pi - delta)
+                                    if delta > fov_half:
+                                        continue
+                                visible[stage_id] = (cx, cy)
+                            return visible
+                        
+                        for a in sim.agents():
+                            m = agent_metadata[a.id]
+                            p = m.get("panic", 0.0)
+                            
+                            if p > 0.8:
+                                m["is_panicking"] = True
+                                if step % 10 == 0:
+                                    neighbor_journeys = []
+                                    for other_a in sim.agents():
+                                        if other_a.id != a.id:
+                                            dist = math.hypot(a.position[0]-other_a.position[0], a.position[1]-other_a.position[1])
+                                            if dist < 3.0:
+                                                neighbor_journeys.append(other_a.journey_id)
+                                    if neighbor_journeys:
+                                        most_common = Counter(neighbor_journeys).most_common(1)[0][0]
+                                        if most_common != a.journey_id:
+                                            journey_to_stage = {v: k for k, v in em_journeys.items()}
+                                            if most_common in journey_to_stage:
+                                                sim.switch_agent_journey(agent_id=a.id, journey_id=most_common, stage_id=journey_to_stage[most_common])
+                                                m["safe_exit_stage"] = journey_to_stage[most_common]
+                                    else:
+                                        visible = get_visible_exits(a, p, exit_centroids)
+                                        if visible:
+                                            nearest = min(visible.keys(), key=lambda s: math.hypot(a.position[0]-visible[s][0], a.position[1]-visible[s][1]))
+                                            if nearest != m.get("safe_exit_stage") and nearest in em_journeys:
+                                                sim.switch_agent_journey(agent_id=a.id, journey_id=em_journeys[nearest], stage_id=nearest)
+                                                m["safe_exit_stage"] = nearest
+                                                
+                            elif p > 0.6:
+                                m["is_panicking"] = True
+                                if step % 40 == 0:
+                                    visible = get_visible_exits(a, p, exit_centroids)
+                                    if visible:
+                                        sorted_exits = sorted(visible.keys(), key=lambda s: math.hypot(a.position[0]-visible[s][0], a.position[1]-visible[s][1]))
+                                        candidates = {s: visible[s] for s in sorted_exits[:2]}
+                                        
+                                        best_stage = None
+                                        min_cost = float('inf')
+                                        for stage_id, (cx, cy) in candidates.items():
+                                            dist_to_exit = math.hypot(a.position[0]-cx, a.position[1]-cy)
+                                            min_f_dist = min([math.hypot(cx-fx, cy-fy) for fx, fy in fire_sources]) if fire_sources else float('inf')
+                                            fire_pen = 200.0 / max(min_f_dist, 1.0) if fire_sources else 0.0
+                                            cost = dist_to_exit + fire_pen
+                                            if cost < min_cost:
+                                                min_cost = cost
+                                                best_stage = stage_id
+                                        
+                                        if best_stage and best_stage != m.get("safe_exit_stage") and best_stage in em_journeys:
+                                            sim.switch_agent_journey(agent_id=a.id, journey_id=em_journeys[best_stage], stage_id=best_stage)
+                                            m["safe_exit_stage"] = best_stage
+                                            
+                            elif p > 0.3:
+                                if step % 100 == 0:
+                                    visible = get_visible_exits(a, p, exit_centroids)
+                                    if visible:
+                                        best_stage = None
+                                        min_cost = float('inf')
+                                        for stage_id, (cx, cy) in visible.items():
+                                            dist_to_exit = math.hypot(a.position[0]-cx, a.position[1]-cy)
+                                            min_f_dist = min([math.hypot(cx-fx, cy-fy) for fx, fy in fire_sources]) if fire_sources else float('inf')
+                                            min_s_dist = min([math.hypot(cx-sx, cy-sy) for sx, sy in smoke_sources]) if smoke_sources else float('inf')
+                                            fire_pen = 1000.0 / max(min_f_dist, 1.0) if fire_sources else 0.0
+                                            smoke_pen = 500.0 / max(min_s_dist, 1.0) if smoke_sources else 0.0
+                                            cost = dist_to_exit + fire_pen + smoke_pen
+                                            if cost < min_cost:
+                                                min_cost = cost
+                                                best_stage = stage_id
+                                        
+                                        if best_stage and best_stage != m.get("safe_exit_stage") and best_stage in em_journeys:
+                                            sim.switch_agent_journey(agent_id=a.id, journey_id=em_journeys[best_stage], stage_id=best_stage)
+                                            m["safe_exit_stage"] = best_stage
+                                                
+                    # Global Panic Decay & Recovery
+                    agents_to_trample = []
+                    for a in sim.agents():
+                        m = agent_metadata[a.id]
+                        
+                        # Distance to exit decay
+                        min_exit_dist = 100.0
+                        if exit_centroids:
+                            min_exit_dist = min([math.hypot(a.position[0]-cx, a.position[1]-cy) for cx, cy in exit_centroids.values()])
+                        
+                        decay = 0.005 if min_exit_dist < 5.0 else 0.0005
+                        m["panic"] = max(0.0, m.get("panic", 0.0) - decay)
+                        
+                        # FREEZE RESPONSE: probability-based, driven by neuroticism + panic
+                        p = m.get("panic", 0.0)
+                        neuroticism = m.get("neuroticism", 0.5)
+                        extraversion = m.get("extraversion", 0.5)
+                        if not m.get("frozen", False) and p > 0.8:
+                            # Freeze probability per frame: high neuroticism + low extraversion = more likely
+                            # Base chance ~0.5% per frame, scaled by traits
+                            freeze_chance = 0.001 * neuroticism * (1.0 - extraversion)
+                            if random.random() < freeze_chance:
+                                m["frozen"] = True
+                                a.model.desired_speed = 0.0
+                        elif m.get("frozen", False) and p < 0.3:
+                            m["frozen"] = False
+                            a.model.desired_speed = m["base_speed"]
+                        elif m.get("frozen", False):
+                            a.model.desired_speed = 0.0  # Keep frozen
+                        
+                        # TRAMPLING: Fast panicked agents trample frozen neighbors
+                        if p > 0.6 and a.model.desired_speed > 1.5 and not m.get("frozen", False):
+                            nearby_ids = sim.agents_in_range(a.position, 0.35)
+                            for nid in nearby_ids:
+                                if nid != a.id and nid in agent_metadata:
+                                    nm = agent_metadata[nid]
+                                    if nm.get("frozen", False) and random.random() < 0.02:  # 2% per frame
+                                        agents_to_trample.append(nid)
                         
                         if m.get("is_panicking", False) and m["panic"] < 0.3:
                             m["is_panicking"] = False
+                            m["frozen"] = False
                             safe_exit = m.get("safe_exit_stage")
                             if safe_exit and emergency_triggered and safe_exit in em_journeys:
                                 sim.switch_agent_journey(agent_id=a.id, journey_id=em_journeys[safe_exit], stage_id=safe_exit)
+                    
+                    # Process tramplings
+                    casualty_event = None
+                    for tid in set(agents_to_trample):
+                        try:
+                            sim.mark_agent_for_removal(tid)
+                            casualties += 1
+                            casualty_log.append({"step": step, "agent_id": tid, "cause": "trampled"})
+                            print(f"  ☠ Agent {tid} TRAMPLED at step {step} (casualties: {casualties})")
+                            casualty_event = {"cause": "trampled", "total": casualties}
+                        except: pass
                                 
                     if step > 0 and sim.agent_count() == 0:
                         print(f"Early exit: Step {step}")
                         break
                     sim.iterate()
+                    
+                    # Track agents that exited normally (not casualties)
+                    for rid in sim.removed_agents():
+                        if rid not in [c["agent_id"] for c in casualty_log]:
+                            exited_agents.add(rid)
                     if step % 100 == 0:
                         print(f"Step {step}/{total_steps}... (Agents: {sim.agent_count()})")
                     if True: # Send every step for high-resolution trails
@@ -442,12 +712,23 @@ async def simulation_stream(websocket: WebSocket):
                             heatmap_data["frame_idx"] = frame_idx
                             heatmaps_cache[frame_idx] = heatmap_data
                             
-                        await websocket.send_json({
+                        progress_msg = {
                             "type": "progress", 
                             "percent": int((step / total_steps) * 100), 
                             "agents": agent_data,
-                            "heatmap": heatmap_data # Send every step for perfect sync
-                        })
+                            "heatmap": heatmap_data,
+                            "casualties": casualties
+                        }
+                        if casualty_event:
+                            progress_msg["casualty_event"] = casualty_event
+                            casualty_event = None
+                        if stampede_alert:
+                            progress_msg["stampede_alert"] = stampede_alert
+                        if clearance_alert:
+                            progress_msg["clearance_alert"] = clearance_alert
+                        if clearance_ended:
+                            progress_msg["clearance_ended"] = True
+                        await websocket.send_json(progress_msg)
                 
                 if hasattr(sim, '_writer'): sim._writer.close()
                 await websocket.send_json({"type": "finished", "file": traj_file})
