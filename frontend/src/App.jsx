@@ -35,6 +35,9 @@ function App() {
   const [showConfigPanel, setShowConfigPanel] = useState(true);
   const [oceanComposition, setOceanComposition] = useState({ openness: 20, conscientiousness: 20, extraversion: 20, agreeableness: 20, neuroticism: 20 });
   const [scenarioType, setScenarioType] = useState('Smoke');
+  const [loiterMode, setLoiterMode] = useState(false);
+  const [emergencyMode, setEmergencyMode] = useState(false);
+  const [emergencyTriggerTime, setEmergencyTriggerTime] = useState(30);
   
   const [leftTab, setLeftTab] = useState('Crowd');
   const [rightTab, setRightTab] = useState('Visuals');
@@ -86,7 +89,10 @@ function App() {
           duration: simDuration,
           ambientTemperature: ambientTemp,
           crowdComposition: { male: 50, female: 50, child: 0 },
-          oceanComposition: oceanComposition
+          oceanComposition: oceanComposition,
+          loiterMode: loiterMode,
+          emergencyMode: emergencyMode,
+          emergencyTriggerTime: emergencyTriggerTime
         }
       }));
       setIsSimulating(true);
@@ -318,7 +324,8 @@ function App() {
       const allElements = [...elements];
       if (drawingPoints.length > 0) { allElements.push({ type: activeTool.toLowerCase(), points: [...drawingPoints, { x: Number(mousePos.x), y: Number(mousePos.y) }], isDrawing: true }); }
       allElements.forEach((el, index) => {
-        if (!el.points || el.points.length < 2) return;
+        if (!el.points || el.points.length === 0) return;
+        if (el.type !== 'scenario' && el.type !== 'poi' && el.points.length < 2) return;
         ctx.beginPath();
         el.points.forEach((p, i) => { const sx = centerX + p.x * step; const sy = centerY - p.y * step; if (i === 0) ctx.moveTo(sx, sy); else ctx.lineTo(sx, sy); });
         if (!el.isDrawing) ctx.closePath();
@@ -336,6 +343,15 @@ function App() {
             ctx.fillStyle = el.scenarioType === 'Smoke' ? 'rgba(156, 163, 175, 0.8)' : (el.scenarioType === 'Fire' ? 'rgba(239, 68, 68, 0.8)' : 'rgba(245, 158, 11, 0.8)');
             ctx.fill(); ctx.strokeStyle = '#ffffff'; ctx.lineWidth = index === selectedId ? 3 : 1; ctx.stroke();
             ctx.fillStyle = 'white'; ctx.font = '10px Inter'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText(el.scenarioType[0], sx, sy);
+            return;
+        }
+        else if (el.type === 'poi') {
+            const sx = centerX + el.points[0].x * step;
+            const sy = centerY - el.points[0].y * step;
+            ctx.beginPath(); ctx.arc(sx, sy, 6, 0, Math.PI * 2);
+            ctx.fillStyle = 'rgba(20, 184, 166, 0.8)'; // Teal
+            ctx.fill(); ctx.strokeStyle = '#ffffff'; ctx.lineWidth = index === selectedId ? 3 : 1; ctx.stroke();
+            ctx.fillStyle = 'white'; ctx.font = '8px Inter'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText('P', sx, sy);
             return;
         }
         ctx.setLineDash(lineDash); ctx.fillStyle = fillColor; ctx.fill(); ctx.strokeStyle = strokeColor; ctx.lineWidth = index === selectedId ? 3 : 2; ctx.stroke(); ctx.globalAlpha = 1.0;
@@ -527,6 +543,10 @@ function App() {
         saveToHistory(elements);
         setElements(prev => [...prev, { id: elements.length, type: 'scenario', scenarioType: scenarioType, points: [{x: Number(pos.x), y: Number(pos.y)}] }]);
         setActiveTool('Select');
+      } else if (activeTool === 'POI') {
+        saveToHistory(elements);
+        setElements(prev => [...prev, { id: elements.length, type: 'poi', points: [{x: Number(pos.x), y: Number(pos.y)}] }]);
+        setActiveTool('Select');
       } else if (['Boundary', 'Exit', 'Obstacle', 'Start'].includes(activeTool)) setDrawingPoints(prev => [...prev, pos]);
     }
   };
@@ -584,6 +604,7 @@ function App() {
           <button className={`toolbar-btn ${activeTool === 'Obstacle' ? 'active' : ''}`} onClick={() => { setActiveTool('Obstacle'); setJourneySource(null); }}>Obstacle</button>
           <button className={`toolbar-btn ${activeTool === 'Start' ? 'active' : ''}`} onClick={() => { setActiveTool('Start'); setJourneySource(null); }}>Start</button>
           <button className={`toolbar-btn ${activeTool === 'Journey' ? 'active' : ''}`} onClick={() => { setActiveTool('Journey'); setJourneySource(null); }}>Journey</button>
+          <button className={`toolbar-btn ${activeTool === 'POI' ? 'active' : ''}`} onClick={() => { setActiveTool('POI'); setJourneySource(null); }}>POI</button>
         </div>
         <div className="toolbar-group" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
           <div className="duration-input" style={{ display: 'flex', alignItems: 'center', background: 'var(--glass)', border: '1px solid var(--border-light)', borderRadius: '4px', padding: '0 8px' }}>
@@ -739,6 +760,29 @@ function App() {
                             {elements.filter(el => el.type === 'scenario').length === 0 && (
                                 <div style={{ fontSize: '11px', color: 'var(--text-muted)', textAlign: 'center', padding: '10px', background: 'rgba(255,255,255,0.02)', borderRadius: '6px' }}>
                                     No active sources
+                                </div>
+                            )}
+                        </div>
+
+                        <div className="panel-section" style={{ marginTop: '20px', padding: 0, border: 'none' }}>
+                            <h4 style={{ fontSize: '12px', color: 'var(--text-main)', marginBottom: '8px' }}>Simulation Modes</h4>
+                            <div className="panel-field">
+                                <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer' }}>
+                                    <input type="checkbox" checked={loiterMode} onChange={(e) => setLoiterMode(e.target.checked)} />
+                                    <span>Loiter Mode (Wander POIs)</span>
+                                </label>
+                            </div>
+                            <div className="panel-field" style={{ marginTop: '10px' }}>
+                                <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer' }}>
+                                    <input type="checkbox" checked={emergencyMode} onChange={(e) => setEmergencyMode(e.target.checked)} />
+                                    <span>Emergency Mode (Fire Alarm)</span>
+                                </label>
+                            </div>
+                            {emergencyMode && (
+                                <div className="panel-field" style={{ marginTop: '10px', marginLeft: '24px' }}>
+                                    <label>Trigger Time (s)</label>
+                                    <input type="range" min="0" max={simDuration} value={emergencyTriggerTime} onChange={(e) => setEmergencyTriggerTime(parseInt(e.target.value))} />
+                                    <div style={{ fontSize: '10px', textAlign: 'right' }}>{emergencyTriggerTime}s</div>
                                 </div>
                             )}
                         </div>
