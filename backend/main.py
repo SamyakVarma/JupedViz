@@ -28,6 +28,7 @@ class Element(BaseModel):
     color: Optional[str] = None
     agentCount: Optional[int] = 10
     crowdComposition: Optional[Dict[str, float]] = None # Local composition
+    scenarioType: Optional[str] = None
 
 class SimulationConfig(BaseModel):
     elements: List[Element]
@@ -44,9 +45,15 @@ def build_jps_simulation(config: SimulationConfig, trajectory_path: str):
     starts = []
     exits = []
     journey_lines = []
+    smoke_sources = []
     
     # Pre-parse elements into shapely objects
     for i, el in enumerate(config.elements):
+        if el.type == 'scenario':
+            if el.scenarioType == 'Smoke':
+                smoke_sources.append((el.points[0].x, el.points[0].y))
+            continue
+            
         if len(el.points) < 2: continue
         pts = [(p.x, p.y) for p in el.points]
         
@@ -79,6 +86,9 @@ def build_jps_simulation(config: SimulationConfig, trajectory_path: str):
         trajectory_writer=jps.SqliteTrajectoryWriter(output_file=pathlib.Path(trajectory_path)),
     )
     simulation.set_ambient_temperature(config.ambientTemperature)
+    
+    for sx, sy in smoke_sources:
+        simulation.add_smoke_source((sx, sy), 50.0) # Emission rate 50.0
     
     # Map Exits to JPS Stage IDs
     exit_to_stage = {}
@@ -317,7 +327,10 @@ async def simulation_stream(websocket: WebSocket):
         import traceback
         traceback.print_exc()
     finally:
-        await websocket.close()
+        try:
+            await websocket.close()
+        except Exception:
+            pass
 
 if __name__ == "__main__":
     import uvicorn

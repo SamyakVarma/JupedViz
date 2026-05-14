@@ -31,8 +31,10 @@ function App() {
   const [ambientTemp, setAmbientTemp] = useState(20.0);
   const [heatmapData, setHeatmapData] = useState(null);
   const [showHeatmap, setShowHeatmap] = useState(true);
+  const [showSmoke, setShowSmoke] = useState(true);
   const [showConfigPanel, setShowConfigPanel] = useState(true);
   const [oceanComposition, setOceanComposition] = useState({ openness: 20, conscientiousness: 20, extraversion: 20, agreeableness: 20, neuroticism: 20 });
+  const [scenarioType, setScenarioType] = useState('Smoke');
   
   const [leftTab, setLeftTab] = useState('Crowd');
   const [rightTab, setRightTab] = useState('Visuals');
@@ -259,6 +261,52 @@ function App() {
         ctx.restore();
       }
 
+      // 0b. Smoke Layer
+      if (showSmoke && heatmapData && heatmapData.smoke_grid) {
+        const { width, height, resolution, smoke_grid, bounds } = heatmapData;
+        
+        // Find the max smoke for normalization
+        let maxSmoke = 0;
+        for (let i = 0; i < smoke_grid.length; i++) {
+          if (smoke_grid[i] > maxSmoke) maxSmoke = smoke_grid[i];
+        }
+        
+        if (maxSmoke > 0.01) {
+          if (!window.smokeCanvas || window.smokeCanvas.width !== width || window.smokeCanvas.height !== height) {
+            window.smokeCanvas = document.createElement('canvas');
+            window.smokeCanvas.width = width;
+            window.smokeCanvas.height = height;
+          }
+          const sCtx = window.smokeCanvas.getContext('2d');
+          const imgData = sCtx.createImageData(width, height);
+          
+          for (let y = 0; y < height; y++) {
+            for (let x = 0; x < width; x++) {
+              const gridIdx = y * width + x;
+              const imgIdx = ((height - 1 - y) * width + x) * 4;
+              const smokeVal = smoke_grid[gridIdx];
+              // Normalize and apply a perceptual curve
+              const normalized = Math.min(1.0, smokeVal / Math.max(maxSmoke, 1.0));
+              const alpha = Math.round(Math.pow(normalized, 0.5) * 210); // max 210/255 opacity
+              // Render as dark greyish smoke with slight brownish tinge
+              imgData.data[imgIdx]     = 40;   // R
+              imgData.data[imgIdx + 1] = 38;   // G
+              imgData.data[imgIdx + 2] = 36;   // B
+              imgData.data[imgIdx + 3] = alpha;
+            }
+          }
+          sCtx.putImageData(imgData, 0, 0);
+          
+          ctx.save();
+          const sw = width * resolution * step;
+          const sh = height * resolution * step;
+          const sx = centerX + bounds.xmin * step;
+          const sy = (centerY - bounds.ymin * step) - sh;
+          ctx.drawImage(window.smokeCanvas, sx, sy, sw, sh);
+          ctx.restore();
+        }
+      }
+
       // 1. Grid
       ctx.strokeStyle = 'rgba(255, 255, 255, 0.05)'; ctx.lineWidth = 1;
       const gridStep = step < 5 ? step * 10 : step; ctx.beginPath();
@@ -281,6 +329,15 @@ function App() {
         else if (el.type === 'exit') { strokeColor = index === selectedId ? '#ffffff' : '#f97316'; fillColor = index === selectedId ? 'rgba(255, 255, 255, 0.2)' : 'rgba(249, 115, 22, 0.1)'; }
         else if (el.type === 'obstacle') { strokeColor = index === selectedId ? '#ffffff' : '#71717a'; fillColor = index === selectedId ? 'rgba(255, 255, 255, 0.2)' : 'rgba(113, 113, 122, 0.1)'; if (!el.isDrawing) lineDash = [4, 4]; }
         else if (el.type === 'journey') { strokeColor = el.color || '#fbbf24'; fillColor = 'transparent'; lineDash = [5, 5]; ctx.globalAlpha = 0.4; }
+        else if (el.type === 'scenario') {
+            const sx = centerX + el.points[0].x * step;
+            const sy = centerY - el.points[0].y * step;
+            ctx.beginPath(); ctx.arc(sx, sy, 8, 0, Math.PI * 2);
+            ctx.fillStyle = el.scenarioType === 'Smoke' ? 'rgba(156, 163, 175, 0.8)' : (el.scenarioType === 'Fire' ? 'rgba(239, 68, 68, 0.8)' : 'rgba(245, 158, 11, 0.8)');
+            ctx.fill(); ctx.strokeStyle = '#ffffff'; ctx.lineWidth = index === selectedId ? 3 : 1; ctx.stroke();
+            ctx.fillStyle = 'white'; ctx.font = '10px Inter'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText(el.scenarioType[0], sx, sy);
+            return;
+        }
         ctx.setLineDash(lineDash); ctx.fillStyle = fillColor; ctx.fill(); ctx.strokeStyle = strokeColor; ctx.lineWidth = index === selectedId ? 3 : 2; ctx.stroke(); ctx.globalAlpha = 1.0;
         if (el.type === 'journey' && !el.isDrawing && el.points.length >= 2) {
           const p1 = el.points[el.points.length - 2]; const p2 = el.points[el.points.length - 1];
@@ -416,7 +473,7 @@ function App() {
     };
     render();
     return () => cancelAnimationFrame(animationFrameId);
-  }, [transform, elements, drawingPoints, mousePos, activeTool, selectedId, agents, showTrails, colorMode, agentTrails]);
+  }, [transform, elements, drawingPoints, mousePos, activeTool, selectedId, agents, showTrails, colorMode, agentTrails, showHeatmap, showSmoke, heatmapData, ambientTemp]);
 
   const deleteSelected = () => { if (selectedId === null) return; saveToHistory(elements); setElements(prev => prev.filter((_, i) => i !== selectedId)); setSelectedId(null); };
   const finalizeDrawing = () => { 
@@ -466,6 +523,10 @@ function App() {
             saveToHistory(elements); setElements(prev => [...prev, { type: 'journey', points: [sMid, dMid], color: `hsl(${Math.random() * 360}, 70%, 60%)` }]); setJourneySource(null);
           }
         }
+      } else if (activeTool === 'ScenarioPoint') {
+        saveToHistory(elements);
+        setElements(prev => [...prev, { id: elements.length, type: 'scenario', scenarioType: scenarioType, points: [{x: Number(pos.x), y: Number(pos.y)}] }]);
+        setActiveTool('Select');
       } else if (['Boundary', 'Exit', 'Obstacle', 'Start'].includes(activeTool)) setDrawingPoints(prev => [...prev, pos]);
     }
   };
@@ -544,6 +605,9 @@ function App() {
                 </button>
                 <button className={`tab-btn ${leftTab === 'Selection' ? 'active' : ''}`} onClick={() => setLeftTab('Selection')}>
                     <Sliders size={14} /> Selection
+                </button>
+                <button className={`tab-btn ${leftTab === 'Scenario' ? 'active' : ''}`} onClick={() => setLeftTab('Scenario')}>
+                    <Zap size={14} /> Scenario
                 </button>
             </div>
 
@@ -648,6 +712,38 @@ function App() {
                         )}
                     </div>
                 )}
+
+                {leftTab === 'Scenario' && (
+                    <div className="panel-section">
+                        <h3><Zap size={16} color="var(--accent)" /> Scenarios</h3>
+                        <div className="panel-field">
+                            <label>Type</label>
+                            <select value={scenarioType} onChange={(e) => setScenarioType(e.target.value)}>
+                                <option>Smoke</option>
+                                <option>Fire</option>
+                                <option>Burst</option>
+                            </select>
+                        </div>
+                        <button className={`toolbar-btn ${activeTool === 'ScenarioPoint' ? 'active' : ''}`} onClick={() => setActiveTool('ScenarioPoint')} style={{ width: '100%', marginBottom: '15px', justifyContent: 'center' }}>
+                            <MapPin size={14} style={{ marginRight: '8px' }} /> Place Source
+                        </button>
+                        
+                        <h4 style={{ fontSize: '12px', color: 'var(--text-main)', marginTop: '20px', marginBottom: '8px' }}>Active Sources</h4>
+                        <div className="start-areas-list" style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                            {elements.filter(el => el.type === 'scenario').map((el, i) => (
+                                <button key={el.id} className="toolbar-btn" style={{ justifyContent: 'space-between', width: '100%', padding: '10px' }} onClick={() => { setSelectedId(el.id); setLeftTab('Selection'); }}>
+                                    <span>{el.scenarioType} Source</span>
+                                    <Trash2 size={12} onClick={(e) => { e.stopPropagation(); setElements(prev => prev.filter(e => e.id !== el.id)); }} />
+                                </button>
+                            ))}
+                            {elements.filter(el => el.type === 'scenario').length === 0 && (
+                                <div style={{ fontSize: '11px', color: 'var(--text-muted)', textAlign: 'center', padding: '10px', background: 'rgba(255,255,255,0.02)', borderRadius: '6px' }}>
+                                    No active sources
+                                </div>
+                            )}
+                        </div>
+                    </div>
+                )}
             </div>
         </div>
         <canvas ref={canvasRef} onWheel={handleWheel} onMouseDown={handleMouseDown} onMouseMove={handleMouseMove} onMouseUp={handleMouseUp} onMouseLeave={handleMouseUp} onContextMenu={handleContextMenu} style={{ cursor: activeTool === 'Move' ? 'grab' : 'crosshair' }} />
@@ -727,6 +823,10 @@ function App() {
                                 <input type="checkbox" checked={showHeatmap} onChange={(e) => setShowHeatmap(e.target.checked)} /> 
                                 <span>Show Heat Map</span> 
                             </label>
+                            <label className="toggle-item"> 
+                                <input type="checkbox" checked={showSmoke} onChange={(e) => setShowSmoke(e.target.checked)} /> 
+                                <span>Show Smoke</span> 
+                            </label>
                         </div>
                         {showHeatmap && (
                             <div className="legend-container">
@@ -734,6 +834,15 @@ function App() {
                                 <div className="legend-labels">
                                     <span>{ambientTemp}°C</span>
                                     <span>{ambientTemp + 20}°C</span>
+                                </div>
+                            </div>
+                        )}
+                        {showSmoke && (
+                            <div className="legend-container" style={{ marginTop: '8px' }}>
+                                <div className="legend-bar" style={{ background: 'linear-gradient(to right, rgba(40,38,36,0), rgba(40,38,36,0.5), rgba(40,38,36,1))' }} />
+                                <div className="legend-labels">
+                                    <span>No Smoke</span>
+                                    <span>Dense Smoke</span>
                                 </div>
                             </div>
                         )}
